@@ -1,0 +1,75 @@
+// 5. Greedy Time-based Initialization for PDP
+vector<vector<int>> initGreedyTimeBasedPDP(int populationSize, const PDPData& data) {
+    vector<vector<int>> population;
+    random_device rd;
+    mt19937 gen(rd());
+    
+    // Build distance matrix
+    vector<vector<double>> distMatrix = buildDistanceMatrix(data);
+    
+    for (int p = 0; p < populationSize; p++) {
+        vector<vector<int>> routes(data.numTrucks);
+        vector<bool> visited(data.numNodes + 1, false);
+        int currentLoad = 0;
+        
+        // Start from the depot
+        for (int t = 0; t < data.numTrucks; t++) {
+            int currentPos = data.depotIndex; // Start at depot
+            visited[currentPos] = true; // Mark depot as visited
+            routes[t].push_back(currentPos); // Add depot to the route
+            
+            while (true) {
+                double minWeight = numeric_limits<double>::max();
+                int nextNode = -1;
+
+                // Find the next node with the minimum greedy weight
+                for (int i = 1; i <= data.numNodes; i++) {
+                    if (!visited[i] && (data.nodeTypes[i - 1] == "P" || data.nodeTypes[i - 1] == "DL")) {
+                        double travelTime = distMatrix[currentPos - 1][i - 1] / data.truckSpeed * 60; // Convert to minutes
+                        double greedyWeight = data.readyTimes[i - 1] + travelTime;
+
+                        if (greedyWeight < minWeight) {
+                            minWeight = greedyWeight;
+                            nextNode = i;
+                        }
+                    }
+                }
+
+                // If no next node is found, break
+                if (nextNode == -1) {
+                    break;
+                }
+
+                // Check if adding the next node exceeds the truck capacity
+                if (currentLoad + 1 <= data.truckCapacity) {
+                    routes[t].push_back(nextNode);
+                    visited[nextNode] = true; // Mark as visited
+                    currentLoad += 1; // Update current load
+                    currentPos = nextNode; // Move to the next node
+                } else {
+                    break; // Stop if capacity is exceeded
+                }
+            }
+
+            // Return to depot after finishing the route
+            routes[t].push_back(data.depotIndex);
+            currentLoad = 0; // Reset load for the next truck
+        }
+
+        // Convert routes to sequence format
+        vector<int> seq;
+        for (size_t i = 0; i < routes.size(); i++) {
+            for (int nodeId : routes[i]) {
+                seq.push_back(nodeId);
+            }
+            if (i < routes.size() - 1) {
+                seq.push_back(0); // Add route separator
+            }
+        }
+
+        quickRepairPDP(seq, data, gen); // Repair the sequence
+        population.push_back(seq); // Add to population
+    }
+
+    return population;
+}

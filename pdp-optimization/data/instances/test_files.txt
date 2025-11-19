@@ -1,0 +1,80 @@
+// 5. Greedy Time-based Initialization for PDP
+vector<vector<int>> initGreedyTimeBasedPDP(int populationSize, const PDPData& data) {
+    vector<vector<int>> population;
+    random_device rd;
+    mt19937 gen(rd());
+    
+    // Build distance matrix
+    vector<vector<double>> distMatrix = buildDistanceMatrix(data);
+    
+    for (int p = 0; p < populationSize; p++) {
+        vector<vector<int>> routes(data.numTrucks);
+        vector<bool> visited(data.numNodes + 1, false);
+        vector<int> routeLoad(data.numTrucks, 0);
+        vector<int> routePosition(data.numTrucks, data.depotIndex - 1); // Current position (0-indexed)
+        
+        // Initialize routes for each truck
+        for (int t = 0; t < data.numTrucks; t++) {
+            routes[t].push_back(data.depotIndex); // Start from depot
+            visited[data.depotIndex] = true;
+        }
+        
+        // Greedily assign customers to trucks
+        while (true) {
+            double minWeight = numeric_limits<double>::max();
+            int bestTruck = -1;
+            int bestCustomer = -1;
+            
+            // Find the best customer to add to any truck
+            for (int customer = 1; customer <= data.numNodes; customer++) {
+                if (visited[customer] || data.nodeTypes[customer - 1] == "D") continue; // Skip visited or delivery nodes
+                
+                for (int t = 0; t < data.numTrucks; t++) {
+                    if (routeLoad[t] < data.truckCapacity) { // Check if truck can take more load
+                        double travelTime = distMatrix[routePosition[t]][customer - 1] / data.truckSpeed * 60; // Convert to minutes
+                        double readyTime = data.readyTimes[customer - 1];
+                        double greedyWeight = travelTime + readyTime;
+                        
+                        if (greedyWeight < minWeight) {
+                            minWeight = greedyWeight;
+                            bestTruck = t;
+                            bestCustomer = customer;
+                        }
+                    }
+                }
+            }
+            
+            // If no customer can be added, break the loop
+            if (bestCustomer == -1) break;
+            
+            // Assign the best customer to the best truck
+            routes[bestTruck].push_back(bestCustomer);
+            visited[bestCustomer] = true;
+            routeLoad[bestTruck] += 1; // Increment load for the truck
+            routePosition[bestTruck] = bestCustomer - 1; // Update current position
+        }
+        
+        // End each route at the depot
+        for (int t = 0; t < data.numTrucks; t++) {
+            if (!routes[t].empty()) {
+                routes[t].push_back(data.depotIndex); // Return to depot
+            }
+        }
+        
+        // Convert routes to sequence format
+        vector<int> seq;
+        for (size_t i = 0; i < routes.size(); i++) {
+            for (int nodeId : routes[i]) {
+                seq.push_back(nodeId);
+            }
+            if (i < routes.size() - 1) {
+                seq.push_back(0); // Route separator
+            }
+        }
+        
+        quickRepairPDP(seq, data, gen); // Repair the sequence if needed
+        population.push_back(seq);
+    }
+    
+    return population;
+}
