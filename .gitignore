@@ -1,0 +1,27 @@
+# Binary executables
+main_ga_tabu
+main_init
+analyze_distances
+pdp_init_test
+test_*
+
+# Debug symbols
+*.dSYM/
+
+# macOS
+.DS_Store
+
+# VSCode
+.vscode/
+
+# Temporary files
+tempCodeRunnerFile.*
+*.tmp
+
+# Object files
+*.o
+*.obj
+
+# Compiled binaries
+*.exe
+*.out
