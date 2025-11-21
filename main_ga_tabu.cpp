@@ -4,7 +4,8 @@
 #include "pdp_types.h"
 #include "pdp_reader.h"
 #include "pdp_utils.h"
-#include "pdp_ga_tabu.h"
+#include "pdp_ga.h"
+#include "pdp_tabu.h"
 #include "pdp_fitness.h"
 
 using namespace std;
