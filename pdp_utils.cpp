@@ -48,22 +48,75 @@ bool validatePDPConstraints(const PDPSolution& solution, const PDPData& data) {
 }
 
 void printSolution(const PDPSolution& solution, const PDPData& data) {
-    cout << "\nSolution Routes:" << endl;
-    cout << "Total cost: " << fixed << setprecision(2) << solution.totalCost << endl;
-    cout << "Feasible: " << (solution.isFeasible ? "YES" : "NO") << endl;
+    cout << "\n╔══════════════════════════════════════════════════════════════╗" << endl;
+    cout << "║              SOLUTION DETAILS (Thời gian thực tế)           ║" << endl;
+    cout << "╚══════════════════════════════════════════════════════════════╝" << endl;
     
-    for (int i = 0; i < solution.routes.size(); i++) {
-        cout << "Route " << (i + 1) << ": ";
-        for (int j = 0; j < solution.routes[i].size(); j++) {
-            int nodeId = solution.routes[i][j];
-            cout << nodeId;
-            if (nodeId > 0 && nodeId <= data.nodeTypes.size()) {
-                cout << "(" << data.nodeTypes[nodeId - 1] << ")";
+    cout << "\n📊 TỔNG QUAN:" << endl;
+    cout << "   Total Cost (C_max): " << fixed << setprecision(2) << solution.totalCost << " phút" << endl;
+    cout << "   Feasible: " << (solution.isFeasible ? "✅ YES" : "❌ NO") << endl;
+    
+    // In chi tiết từng xe
+    cout << "\n🚛 CHI TIẾT CÁC XE TẢI:" << endl;
+    for (const auto& truck_info : solution.truck_details) {
+        cout << "\n   ┌─ Xe " << truck_info.truck_id << " ─────────────────────────────────" << endl;
+        cout << "   │ Hoàn thành: " << fixed << setprecision(2) << truck_info.completion_time << " phút" << endl;
+        cout << "   │ Route: ";
+        
+        for (size_t i = 0; i < truck_info.route.size(); i++) {
+            int nodeIdx = truck_info.route[i];
+            if (nodeIdx >= 0 && nodeIdx < data.nodeTypes.size()) {
+                cout << nodeIdx << "(" << data.nodeTypes[nodeIdx] << ")";
+            } else {
+                cout << nodeIdx;
             }
-            if (j < solution.routes[i].size() - 1) cout << " -> ";
+            if (i < truck_info.route.size() - 1) cout << " → ";
         }
         cout << endl;
+        
+        cout << "   │ Timeline:" << endl;
+        for (size_t i = 0; i < truck_info.route.size(); i++) {
+            int nodeIdx = truck_info.route[i];
+            string nodeType = (nodeIdx >= 0 && nodeIdx < data.nodeTypes.size()) ? data.nodeTypes[nodeIdx] : "?";
+            
+            cout << "   │   " << setw(2) << i << ". Node " << setw(2) << nodeIdx 
+                 << " (" << setw(2) << nodeType << "): ";
+            cout << "Đến=" << setw(6) << fixed << setprecision(1) << truck_info.arrival_times[i] << "' ";
+            cout << "Rời=" << setw(6) << fixed << setprecision(1) << truck_info.departure_times[i] << "'" << endl;
+        }
+        cout << "   └─────────────────────────────────────────────────" << endl;
     }
+    
+    // In chi tiết drone resupply
+    if (!solution.resupply_events.empty()) {
+        cout << "\n🚁 CHI TIẾT DRONE RESUPPLY:" << endl;
+        for (size_t i = 0; i < solution.resupply_events.size(); i++) {
+            const auto& event = solution.resupply_events[i];
+            cout << "\n   ┌─ Resupply #" << (i + 1) << " ─────────────────────────────────" << endl;
+            cout << "   │ Khách hàng: Node " << event.customer_id << endl;
+            cout << "   │ Drone: Drone " << event.drone_id << endl;
+            cout << "   │ Gặp xe: Xe " << event.truck_id << endl;
+            cout << "   │ Timeline:" << endl;
+            cout << "   │   - Drone rời depot:     " << setw(6) << fixed << setprecision(1) << event.drone_depart_time << " phút" << endl;
+            cout << "   │   - Drone đến khách:     " << setw(6) << event.drone_arrive_time << " phút" << endl;
+            cout << "   │   - Xe đến khách:        " << setw(6) << event.truck_arrive_time << " phút" << endl;
+            cout << "   │   - Bắt đầu resupply:    " << setw(6) << event.resupply_start << " phút" << endl;
+            cout << "   │   - Kết thúc resupply:   " << setw(6) << event.resupply_end << " phút" << endl;
+            cout << "   │   - Drone về depot:      " << setw(6) << event.drone_return_time << " phút" << endl;
+            cout << "   └─────────────────────────────────────────────────" << endl;
+        }
+    }
+    
+    // In thời gian hoàn thành của từng drone
+    if (!solution.drone_completion_times.empty()) {
+        cout << "\n🚁 THỜI GIAN HOÀN THÀNH CÁC DRONE:" << endl;
+        for (size_t i = 0; i < solution.drone_completion_times.size(); i++) {
+            cout << "   Drone " << i << ": " << fixed << setprecision(2) 
+                 << solution.drone_completion_times[i] << " phút" << endl;
+        }
+    }
+    
+    cout << "\n═══════════════════════════════════════════════════════════════" << endl;
 }
 
 double calculateSolutionCost(const PDPSolution& solution, const vector<vector<double>>& distMatrix) {

@@ -16,7 +16,7 @@ struct PDPData {
     double truckSpeed = 30.0;            
     double truckServiceTime = 3.0; // (δ) Thời gian phục vụ P/DL (phút)       
     double depotReceiveTime = 5.0; // (δt) Thời gian xe tải ở depot (phút)       
-    int depotIndex = 1;                  
+    int depotIndex = 0; // Index 0-based của depot
     vector<pair<double,double>> coordinates; 
     vector<string> nodeTypes;               
     vector<int> readyTimes;                 
@@ -37,45 +37,67 @@ struct PDPData {
     double resupplyTime = 5.0;           // (Δ) Thời gian resupply (phút)
     double depotDroneLoadTime = 5.0;     // (δd) Thời gian drone lấy hàng ở depot (phút)
 
-    // --- Distance Matrix (BẮT BUỘC) ---
-    vector<vector<double>> distMatrix; // Ma trận khoảng cách chung cho cả truck và drone (Euclidean)
+    // --- Distance Matrix (SỬA LỖI LOGIC: Cần 2 ma trận) ---
+    vector<vector<double>> truckDistMatrix; // Manhattan (Truck)
+    vector<vector<double>> droneDistMatrix; // Euclidean (Drone)
 
 
     // --- Helpers (Cập nhật) ---
     int getSeparatorStart() const {
-        return numCustomers + 1; // Separator bắt đầu từ số khách + 1
+        return numNodes; // Separator bắt đầu từ số nút (total nodes)
     }
     bool isSeparator(int id) const {
         int s = getSeparatorStart();
         return (id >= s && id < s + numTrucks);
     }
     
-    // SỬA LỖI QUAN TRỌNG: isCustomer phải bao gồm cả 3 loại NHƯNG LOẠI TRỪ DEPOT
+    // isCustomer: ID là 0-based array index
     bool isCustomer(int id) const {
-        if (id <= 0 || id >= numNodes) return false; // 0-based: depot=0, customers=1,2,3,...
-        if (id == depotIndex) return false; // Depot không phải customer
-        string t = nodeTypes[id]; // id là array index (0-based)
-        // Chỉ tính là "customer" nếu là P, DL, hoặc D (có ready time > 0)
+        if (id < 0 || id >= numNodes) return false; 
+        if (id == depotIndex) return false; 
+        string t = nodeTypes[id]; 
         return (t == "P" || t == "DL" || (t == "D" && readyTimes[id] > 0));
     }
     
-    // Kiểm tra có phải depot không
     bool isDepot(int id) const {
         return (id == depotIndex); // depotIndex = 0
     }
     
-    // Lấy node ID dạng 1-based để hiển thị
-    int getDisplayNodeId(int arrayIndex) const {
-        return arrayIndex + 1; // Array index 0→1, 1→2, etc.
-    }
+};
+
+// Cấu trúc lưu thông tin chi tiết về resupply
+struct ResupplyEvent {
+    int customer_id;          // ID khách hàng được resupply
+    int drone_id;             // Drone nào phục vụ
+    int truck_id;             // Xe tải nào gặp
+    double drone_depart_time; // Drone rời depot lúc nào
+    double drone_arrive_time; // Drone đến khách lúc nào
+    double truck_arrive_time; // Xe đến khách lúc nào
+    double resupply_start;    // Bắt đầu resupply lúc nào
+    double resupply_end;      // Kết thúc resupply lúc nào
+    double drone_return_time; // Drone về depot lúc nào
+};
+
+// Cấu trúc lưu thông tin chi tiết về route của từng xe
+struct TruckRouteInfo {
+    int truck_id;
+    vector<int> route;        // Thứ tự các node (bao gồm depot)
+    vector<double> arrival_times;  // Thời gian đến mỗi node
+    vector<double> departure_times; // Thời gian rời mỗi node
+    double completion_time;   // Thời gian hoàn thành (về depot)
 };
 
 // Cấu trúc cho một lời giải đã được giải mã
 struct PDPSolution {
-    vector<vector<int>> routes; // (Giữ nguyên)
+    vector<vector<int>> routes; // (Giữ nguyên để tương thích)
     double totalCost = 0.0;     // (Sẽ là C_max)
     double totalPenalty = 0.0;  // (Phạt)
     bool isFeasible = false;    // (Giữ nguyên)
+    
+    // Thông tin chi tiết (MỚI)
+    vector<TruckRouteInfo> truck_details;
+    vector<ResupplyEvent> resupply_events;
+    vector<double> drone_completion_times; // Thời gian hoàn thành của mỗi drone
 };
 
 #endif
