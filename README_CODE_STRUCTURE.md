@@ -38,7 +38,6 @@ Dự án này giải quyết bài toán Pickup-Delivery Problem (PDP) với sự
 #### **pdp_utils.cpp/h**
 - Utility functions: print solution, statistics
 - `printSolution()`: In chi tiết solution với timeline
-- Format đẹp với icons và bảng
 
 ---
 

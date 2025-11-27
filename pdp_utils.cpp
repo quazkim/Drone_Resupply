@@ -52,12 +52,12 @@ void printSolution(const PDPSolution& solution, const PDPData& data) {
     cout << "║              SOLUTION DETAILS (Thời gian thực tế)           ║" << endl;
     cout << "╚══════════════════════════════════════════════════════════════╝" << endl;
     
-    cout << "\n📊 TỔNG QUAN:" << endl;
+    cout << "\n TỔNG QUAN:" << endl;
     cout << "   Total Cost (C_max): " << fixed << setprecision(2) << solution.totalCost << " phút" << endl;
-    cout << "   Feasible: " << (solution.isFeasible ? "✅ YES" : "❌ NO") << endl;
+    cout << "   Feasible: " << (solution.isFeasible ? "YES" : " NO") << endl;
     
     // In chi tiết từng xe
-    cout << "\n🚛 CHI TIẾT CÁC XE TẢI:" << endl;
+    cout << "\nCHI TIẾT CÁC XE TẢI:" << endl;
     for (const auto& truck_info : solution.truck_details) {
         cout << "\n   ┌─ Xe " << truck_info.truck_id << " ─────────────────────────────────" << endl;
         cout << "   │ Hoàn thành: " << fixed << setprecision(2) << truck_info.completion_time << " phút" << endl;
@@ -89,7 +89,7 @@ void printSolution(const PDPSolution& solution, const PDPData& data) {
     
     // In chi tiết drone resupply
     if (!solution.resupply_events.empty()) {
-        cout << "\n🚁 CHI TIẾT DRONE RESUPPLY:" << endl;
+        cout << "\nCHI TIẾT DRONE RESUPPLY:" << endl;
         for (size_t i = 0; i < solution.resupply_events.size(); i++) {
             const auto& event = solution.resupply_events[i];
             cout << "\n   ┌─ Resupply #" << (i + 1) << " ─────────────────────────────────" << endl;
@@ -109,7 +109,7 @@ void printSolution(const PDPSolution& solution, const PDPData& data) {
     
     // In thời gian hoàn thành của từng drone
     if (!solution.drone_completion_times.empty()) {
-        cout << "\n🚁 THỜI GIAN HOÀN THÀNH CÁC DRONE:" << endl;
+        cout << "\n THỜI GIAN HOÀN THÀNH CÁC DRONE:" << endl;
         for (size_t i = 0; i < solution.drone_completion_times.size(); i++) {
             cout << "   Drone " << i << ": " << fixed << setprecision(2) 
                  << solution.drone_completion_times[i] << " phút" << endl;
