@@ -23,9 +23,9 @@ int main(int argc, char* argv[]) {
     double mutationRate = (argc >= 5) ? stod(argv[4]) : 0.1;
     int runNumber = (argc >= 6) ? stoi(argv[5]) : 1;
 
-    cout << "\n╔════════════════════════════════════════════════════════╗" << endl;
-    cout << "║     PDP SOLVER - GA + TABU SEARCH                  ║" << endl;
-    cout << "╚════════════════════════════════════════════════════════╝" << endl;
+    cout << "\n+========================================================+" << endl;
+    cout << "|     PDP SOLVER - GA + TABU SEARCH                  |" << endl;
+    cout << "+========================================================+" << endl;
 
     // Read instance
     cout << "\nReading instance: " << instanceFile << endl;
@@ -45,9 +45,9 @@ int main(int argc, char* argv[]) {
     PDPSolution solution = geneticAlgorithmPDP(data, populationSize, maxGenerations, mutationRate, runNumber);
     
     // Print final solution
-    cout << "\n╔════════════════════════════════════════════════════════╗" << endl;
-    cout << "║               FINAL SOLUTION                       ║" << endl;
-    cout << "╚════════════════════════════════════════════════════════╝" << endl;
+    cout << "\n+========================================================+" << endl;
+    cout << "|               FINAL SOLUTION                       |" << endl;
+    cout << "+========================================================+" << endl;
     printSolution(solution, data);
     
     cout << "\n=========================================" << endl;
