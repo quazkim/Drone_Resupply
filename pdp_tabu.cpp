@@ -105,6 +105,9 @@ vector<int> TabuSearchPDP::applyMove(const vector<int>& seq, const TabuMove& mov
                 int insertPos = move.j;
                 if (move.j > move.i) insertPos -= blockSize;
                 
+                // Safety check: ensure insertPos is valid
+                insertPos = max(0, min(insertPos, (int)result.size()));
+                
                 result.insert(result.begin() + insertPos, block.begin(), block.end());
             }
             break;
@@ -119,8 +122,18 @@ vector<int> TabuSearchPDP::applyMove(const vector<int>& seq, const TabuMove& mov
                 int insertPos = move.j;
                 if (move.j > move.i) insertPos -= 2;
                 
-                result.insert(result.begin() + insertPos, cust1);
-                result.insert(result.begin() + insertPos + 1, cust2);
+                // Safety check: ensure insertPos is valid
+                insertPos = max(0, min(insertPos, (int)result.size()));
+                
+                // Insert both elements safely
+                if (insertPos < (int)result.size()) {
+                    result.insert(result.begin() + insertPos, cust1);
+                    result.insert(result.begin() + insertPos + 1, cust2);
+                } else {
+                    // Insert at end
+                    result.push_back(cust1);
+                    result.push_back(cust2);
+                }
             }
             break;
         }

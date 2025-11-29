@@ -366,8 +366,9 @@ void displacementMutation(vector<int>& seq, mt19937& gen) {
     
     // Đảm bảo có ít nhất 1 phần tử để di chuyển
     if (start == end) {
-        if (end < seq.size() - 1) end++;
-        else start--;
+        if (end < (int)seq.size() - 1) end++;
+        else if (start > 0) start--;
+        else return;
     }
     
     // Chọn vị trí đích (không trùng với đoạn hiện tại)
@@ -389,10 +390,13 @@ void displacementMutation(vector<int>& seq, mt19937& gen) {
     // Xóa đoạn cũ
     seq.erase(seq.begin() + start, seq.begin() + end + 1);
     
-    // Chèn vào vị trí mới
+    // Tính newPos sau khi xóa và đảm bảo hợp lệ
     if (newPos > start) {
         newPos -= (end - start + 1);
     }
+    newPos = max(0, min(newPos, (int)seq.size()));
+    
+    // Chèn vào vị trí mới
     seq.insert(seq.begin() + newPos, segment.begin(), segment.end());
 }
 
@@ -552,14 +556,14 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
             crossoverTypes.push_back(crossoverType);
             
             vector<int> child;
-            if (crossoverType == 0) {
+            // Use only first 3 crossovers (safer, well-tested)
+            int safeType = crossoverType % 3;
+            if (safeType == 0) {
                 child = orderCrossover(parent1, parent2, rng);
-            } else if (crossoverType == 1) {
+            } else if (safeType == 1) {
                 child = pmxCrossover(parent1, parent2, rng);
-            } else if (crossoverType == 2) {
-                child = cycleCrossover(parent1, parent2, rng);
             } else {
-                child = edgeCrossover(parent1, parent2, rng);
+                child = cycleCrossover(parent1, parent2, rng);
             }
             
             // Repair to ensure all customers present
@@ -678,16 +682,36 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
             cout << "\n[TABU] No improvement for " << tabuThreshold 
                  << " generations. Applying Tabu Search..." << endl;
             
+            // Validate bestSequence before Tabu
+            if (bestSequence.size() != data.numCustomers) {
+                cerr << "ERROR: bestSequence size mismatch before Tabu: " 
+                     << bestSequence.size() << " vs " << data.numCustomers << endl;
+                tabuApplied = true;
+                continue;
+            }
+            
             // Apply tabu to best sequence
-            bestSequence = tabuSearchPDP(bestSequence, data, 100);
-            bestSolution = decodeAndEvaluate(bestSequence, data);
-            
-            // Replace worst individual with tabu result
-            population[populationSize - 1] = bestSequence;
-            fitness[populationSize - 1] = bestSolution.totalCost + bestSolution.totalPenalty;
-            
-            cout << "[TABU] After Tabu Search: " << fixed << setprecision(2)
-                 << bestSolution.totalCost << " (penalty: " << bestSolution.totalPenalty << ")" << endl;
+            try {
+                bestSequence = tabuSearchPDP(bestSequence, data, 100);
+                bestSolution = decodeAndEvaluate(bestSequence, data);
+                
+                // Validate after Tabu
+                if (bestSequence.size() != data.numCustomers) {
+                    cerr << "ERROR: bestSequence corrupted after Tabu: " 
+                         << bestSequence.size() << " vs " << data.numCustomers << endl;
+                    tabuApplied = true;
+                    continue;
+                }
+                
+                // Replace worst individual with tabu result
+                population[populationSize - 1] = bestSequence;
+                fitness[populationSize - 1] = bestSolution.totalCost + bestSolution.totalPenalty;
+                
+                cout << "[TABU] After Tabu Search: " << fixed << setprecision(2)
+                     << bestSolution.totalCost << " (penalty: " << bestSolution.totalPenalty << ")" << endl;
+            } catch (const exception& e) {
+                cerr << "ERROR in Tabu Search: " << e.what() << endl;
+            }
             
             tabuApplied = true;
             noImprovementCounter = 0;
