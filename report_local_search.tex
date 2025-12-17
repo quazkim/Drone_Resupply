@@ -1,0 +1,626 @@
+\documentclass[12pt,a4paper]{article}
+
+% ============ PACKAGES ============
+\usepackage[utf8]{inputenc}
+\usepackage[vietnamese]{babel}
+\usepackage{amsmath, amsfonts, amssymb}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{enumitem}
+
+\geometry{margin=2.5cm}
+
+% ============ CUSTOM COMMANDS ============
+\newcommand{\Cmax}{C_{\max}}
+\newcommand{\Ttravel}{T_{\text{travel}}}
+\newcommand{\Tservice}{T_{\text{service}}}
+\newcommand{\Tready}{T_{\text{ready}}}
+\newcommand{\Tarrive}{T_{\text{arrive}}}
+\newcommand{\Tdepart}{T_{\text{depart}}}
+
+% ============ TITLE ============
+\title{
+    \vspace{-1cm}
+    \textbf{Báo Cáo Kỹ Thuật} \\
+    \Large Thuật Toán Local Search Thích Ứng cho Bài Toán \\
+    Pickup-Delivery với Drone Resupply
+}
+\author{
+    Drone Resupply Project
+}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Báo cáo này trình bày chi tiết về cấu trúc mã hóa lời giải, logic tính toán các thành phần trong solution, và đặc biệt là thuật toán Local Search thích ứng (Adaptive Local Search) với 11 operators được thiết kế cho bài toán Pickup-Delivery Problem with Drone Resupply. Chúng tôi mô tả cơ chế chọn operator dựa trên hiệu suất thực thi (Adaptive Operator Selection) và hàm đánh giá sau khi thực hiện các phép biến đổi.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Mã Hóa Lời Giải (Solution Encoding)}
+% ============================================================
+
+\subsection{Tổng Quan Cấu Trúc Solution}
+
+Lời giải của bài toán Pickup-Delivery with Drone Resupply được mã hóa thông qua cấu trúc \texttt{PDPSolution} bao gồm các thành phần sau:
+
+\begin{equation}
+\mathcal{S} = \langle \mathcal{R}, \mathcal{E}, \Cmax, \mathcal{P}, \mathcal{F} \rangle
+\end{equation}
+
+Trong đó:
+\begin{itemize}[leftmargin=2cm]
+    \item $\mathcal{R} = \{R_0, R_1, \ldots, R_{m-1}\}$: Tập các tuyến đường của $m$ xe tải
+    \item $\mathcal{E} = \{E_0, E_1, \ldots, E_{k-1}\}$: Tập các sự kiện drone resupply
+    \item $\Cmax$: Makespan (thời gian hoàn thành tổng thể)
+    \item $\mathcal{P}$: Tổng penalty cho các vi phạm ràng buộc
+    \item $\mathcal{F} \in \{\text{true}, \text{false}\}$: Tính khả thi của lời giải
+\end{itemize}
+
+\subsection{Mã Hóa Tuyến Đường Xe Tải (Truck Route)}
+
+Mỗi tuyến đường xe tải $R_t$ được biểu diễn như một chuỗi có thứ tự:
+
+\begin{equation}
+R_t = \langle v_0, v_1, v_2, \ldots, v_{n_t}, v_0 \rangle
+\end{equation}
+
+Trong đó:
+\begin{itemize}
+    \item $v_0 = 0$: Depot (điểm xuất phát và kết thúc)
+    \item $v_i \in \mathcal{V}$: Node thứ $i$ trong tuyến đường
+    \item $n_t$: Số nodes được phục vụ bởi xe tải $t$
+\end{itemize}
+
+Mỗi tuyến đường còn lưu trữ thông tin thời gian chi tiết:
+
+\begin{equation}
+\text{TruckRouteInfo}_t = \langle R_t, \mathbf{T}^{arr}_t, \mathbf{T}^{dep}_t, T^{comp}_t \rangle
+\end{equation}
+
+Với:
+\begin{align}
+\mathbf{T}^{arr}_t &= [T^{arr}_{t,0}, T^{arr}_{t,1}, \ldots, T^{arr}_{t,n_t}] & \text{(Thời gian đến)} \\
+\mathbf{T}^{dep}_t &= [T^{dep}_{t,0}, T^{dep}_{t,1}, \ldots, T^{dep}_{t,n_t}] & \text{(Thời gian rời)} \\
+T^{comp}_t &= T^{dep}_{t,n_t} & \text{(Thời gian hoàn thành)}
+\end{align}
+
+\subsection{Mã Hóa Sự Kiện Drone Resupply}
+
+Mỗi sự kiện drone resupply $E_k$ (có thể phục vụ nhiều khách hàng - consolidation):
+
+\begin{equation}
+E_k = \langle \mathcal{C}_k, d_k, t_k, T^{dep}_k, \mathbf{T}^{drone}_k, \mathbf{T}^{truck}_k, \mathbf{T}^{start}_k, \mathbf{T}^{end}_k, T^{return}_k, T^{flight}_k \rangle
+\end{equation}
+
+Trong đó:
+\begin{itemize}
+    \item $\mathcal{C}_k = \{c_1, c_2, \ldots, c_{|\mathcal{C}_k|}\}$: Tập khách hàng được phục vụ trong trip
+    \item $d_k \in \{0, 1, \ldots, D-1\}$: ID của drone thực hiện trip
+    \item $t_k \in \{0, 1, \ldots, m-1\}$: ID của xe tải gặp drone
+    \item $T^{dep}_k$: Thời điểm drone rời depot
+    \item $\mathbf{T}^{drone}_k$: Vector thời gian drone đến từng khách hàng
+    \item $\mathbf{T}^{truck}_k$: Vector thời gian truck đến từng khách hàng
+    \item $\mathbf{T}^{start}_k, \mathbf{T}^{end}_k$: Thời gian bắt đầu/kết thúc resupply tại từng điểm
+    \item $T^{return}_k$: Thời điểm drone quay về depot
+    \item $T^{flight}_k$: Tổng thời gian bay (để kiểm tra endurance)
+\end{itemize}
+
+\subsection{Phân Loại Khách Hàng}
+
+Các khách hàng được phân thành 3 loại theo nodeType:
+
+\begin{table}[H]
+\centering
+\caption{Phân loại khách hàng theo nodeType}
+\begin{tabular}{clll}
+\toprule
+\textbf{Type} & \textbf{Mô tả} & \textbf{Đặc điểm} & \textbf{Phục vụ bởi} \\
+\midrule
+P & Pickup point & demand $> 0$ & Truck only \\
+DL & Delivery point & demand $< 0$, có pairId & Truck only \\
+D & Direct delivery & readyTime $> 0$ & Drone hoặc Truck \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================
+\section{Logic Tính Toán Các Thành Phần}
+% ============================================================
+
+\subsection{Tính Toán Khoảng Cách}
+
+Hệ thống sử dụng hai loại khoảng cách khác nhau cho truck và drone:
+
+\textbf{Manhattan Distance (cho Truck):}
+\begin{equation}
+d_{\text{truck}}(i, j) = |x_i - x_j| + |y_i - y_j|
+\end{equation}
+
+\textbf{Euclidean Distance (cho Drone):}
+\begin{equation}
+d_{\text{drone}}(i, j) = \sqrt{(x_i - x_j)^2 + (y_i - y_j)^2}
+\end{equation}
+
+\subsection{Tính Toán Thời Gian Di Chuyển}
+
+\textbf{Thời gian di chuyển của Truck:}
+\begin{equation}
+T_{\text{travel}}^{\text{truck}}(i, j) = \frac{d_{\text{truck}}(i, j)}{v_{\text{truck}}} \times 60 \quad \text{(phút)}
+\end{equation}
+
+\textbf{Thời gian bay của Drone:}
+\begin{equation}
+T_{\text{travel}}^{\text{drone}}(i, j) = \frac{d_{\text{drone}}(i, j)}{v_{\text{drone}}} \times 60 \quad \text{(phút)}
+\end{equation}
+
+Với $v_{\text{truck}} = 30$ km/h và $v_{\text{drone}} = 60$ km/h.
+
+\subsection{Tính Toán Thời Gian Truck Route}
+
+Cho tuyến đường $R_t = \langle v_0, v_1, \ldots, v_n, v_0 \rangle$:
+
+\begin{algorithm}[H]
+\caption{Tính toán thời gian truck route}
+\begin{algorithmic}[1]
+\State $T^{arr}_{t,0} \gets 0$, $T^{dep}_{t,0} \gets 0$, $\text{pos} \gets v_0$
+\For{$i = 1$ to $n$}
+    \State $T^{arr}_{t,i} \gets T^{dep}_{t,i-1} + T_{\text{travel}}^{\text{truck}}(\text{pos}, v_i)$
+    \State $\delta_i \gets$ \Call{GetServiceTime}{$v_i$}
+    \State $T^{dep}_{t,i} \gets T^{arr}_{t,i} + \delta_i$
+    \State $\text{pos} \gets v_i$
+\EndFor
+\State $T^{comp}_t \gets T^{dep}_{t,n}$
+\end{algorithmic}
+\end{algorithm}
+
+Với thời gian phục vụ:
+\begin{equation}
+\delta_i = \begin{cases}
+\delta_t = 5 & \text{nếu } v_i = \text{depot} \\
+\Delta + \delta = 5 + 3 & \text{nếu } v_i \text{ là resupply point} \\
+\delta = 3 & \text{nếu } v_i \text{ là P hoặc DL}
+\end{cases}
+\end{equation}
+
+\subsection{Tính Toán Thời Gian Drone Trip}
+
+Cho drone trip với tập khách hàng $\mathcal{C} = \{c_1, c_2, \ldots, c_k\}$:
+
+\begin{algorithm}[H]
+\caption{Tính toán thời gian drone trip}
+\begin{algorithmic}[1]
+\State $r_{\max} \gets \max_{c \in \mathcal{C}} \text{readyTime}(c)$
+\State $T^{\text{ready}}_d \gets \max(T^{\text{avail}}_d, r_{\max})$
+\State $T^{dep} \gets T^{\text{ready}}_d + \delta_d$ \Comment{$\delta_d$ = drone load time}
+\State $T_{\text{flight}} \gets 0$, $\text{pos} \gets \text{depot}$
+\For{each $c_i \in \mathcal{C}$}
+    \State $t_{\text{fly}} \gets T_{\text{travel}}^{\text{drone}}(\text{pos}, c_i)$
+    \State $T^{\text{drone}}_i \gets T^{dep} + t_{\text{fly}}$
+    \State $T^{\text{truck}}_i \gets T^{\text{avail}}_{\text{truck}} + T_{\text{travel}}^{\text{truck}}(\text{pos}_{\text{truck}}, c_i)$
+    \State $T^{\text{start}}_i \gets \max(T^{\text{drone}}_i, T^{\text{truck}}_i)$ \Comment{Rendezvous point}
+    \State $T^{\text{end}}_i \gets T^{\text{start}}_i + \Delta + \delta$
+    \State $T_{\text{flight}} \gets T_{\text{flight}} + t_{\text{fly}} + (T^{\text{start}}_i - T^{\text{drone}}_i) + \Delta$
+    \State $\text{pos} \gets c_i$
+\EndFor
+\State $t_{\text{return}} \gets T_{\text{travel}}^{\text{drone}}(\text{pos}, \text{depot})$
+\State $T^{\text{return}} \gets T^{\text{end}}_k + t_{\text{return}}$
+\State $T_{\text{flight}} \gets T_{\text{flight}} + t_{\text{return}}$
+\State \textbf{Check:} $T_{\text{flight}} \leq L_d$ \Comment{Endurance constraint}
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Tính Makespan ($\Cmax$)}
+
+Makespan được tính là thời gian hoàn thành muộn nhất:
+
+\begin{equation}
+\Cmax = \max \left\{ \max_{t=0}^{m-1} T^{comp}_t, \max_{k=0}^{|\mathcal{E}|-1} T^{return}_k \right\}
+\end{equation}
+
+% ============================================================
+\section{Thuật Toán Local Search Thích Ứng}
+% ============================================================
+
+\subsection{Tổng Quan}
+
+Thuật toán Adaptive Local Search được thiết kế với 11 operators, chia thành 2 nhóm:
+
+\begin{table}[H]
+\centering
+\caption{Danh sách các operators trong Local Search}
+\begin{tabular}{clp{8cm}}
+\toprule
+\textbf{Nhóm} & \textbf{Operator} & \textbf{Mô tả} \\
+\midrule
+\multirow{4}{*}{\textbf{Truck}} 
+& 2-Opt & Đảo ngược một đoạn trong route \\
+& Swap & Hoán đổi 2 nodes trong route \\
+& Relocate & Di chuyển 1 node sang vị trí khác \\
+& Cross-Exchange & Hoán đổi segments giữa 2 trucks \\
+\midrule
+\multirow{7}{*}{\textbf{Drone}} 
+& Reorder & Thay đổi thứ tự customers trong trip \\
+& Swap & Hoán đổi customers giữa 2 trips \\
+& Move & Di chuyển customer từ trip này sang trip khác \\
+& Merge & Gộp 2 drone trips thành 1 \\
+& Split & Tách 1 trip thành nhiều trips nhỏ \\
+& Reassign & Đổi drone phục vụ trip \\
+& InsertIntoTrip & Thêm customer vào trip có sẵn \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Cơ Chế Chọn Operator Thích Ứng (Adaptive Selection)}
+
+\subsubsection{Thống Kê Hiệu Suất Operator}
+
+Mỗi operator $o$ được theo dõi với các thống kê:
+
+\begin{equation}
+\text{Stats}_o = \langle n_o^{\text{att}}, n_o^{\text{suc}}, \Delta_o^{\text{total}}, w_o \rangle
+\end{equation}
+
+Trong đó:
+\begin{itemize}
+    \item $n_o^{\text{att}}$: Số lần thử operator $o$
+    \item $n_o^{\text{suc}}$: Số lần thành công (cải thiện solution)
+    \item $\Delta_o^{\text{total}}$: Tổng improvement đạt được
+    \item $w_o$: Trọng số selection (adaptive)
+\end{itemize}
+
+\subsubsection{Tỷ Lệ Thành Công và Cải Thiện Trung Bình}
+
+\begin{align}
+\text{SuccessRate}_o &= \frac{n_o^{\text{suc}}}{n_o^{\text{att}}} \quad \text{nếu } n_o^{\text{att}} > 0 \\
+\text{AvgImprovement}_o &= \frac{\Delta_o^{\text{total}}}{n_o^{\text{suc}}} \quad \text{nếu } n_o^{\text{suc}} > 0
+\end{align}
+
+\subsubsection{Cập Nhật Trọng Số}
+
+Trọng số được cập nhật định kỳ (mỗi 10 iterations) theo công thức:
+
+\begin{equation}
+w_o^{\text{new}} = \text{clip}\left( w_{\text{base}} + \alpha \cdot \text{SuccessRate}_o + \beta \cdot \text{AvgImprovement}_o, w_{\min}, w_{\max} \right)
+\end{equation}
+
+Với các tham số:
+\begin{align}
+w_{\text{base}} &= 0.5 & \text{(trọng số cơ bản)} \\
+\alpha &= 2.0 & \text{(hệ số success rate)} \\
+\beta &= 0.1 & \text{(hệ số improvement)} \\
+w_{\min} &= 0.1, \quad w_{\max} = 5.0 & \text{(giới hạn trọng số)}
+\end{align}
+
+\subsubsection{Chọn Operator (Roulette Wheel Selection)}
+
+Cho tập operators $\mathcal{O} = \{o_1, o_2, \ldots, o_n\}$:
+
+\begin{algorithm}[H]
+\caption{Adaptive Operator Selection}
+\begin{algorithmic}[1]
+\State $W \gets \sum_{o \in \mathcal{O}} w_o$ \Comment{Tổng trọng số}
+\State $r \gets \text{Uniform}(0, W)$ \Comment{Random number}
+\State $\text{cumulative} \gets 0$
+\For{each $o_i \in \mathcal{O}$}
+    \State $\text{cumulative} \gets \text{cumulative} + w_{o_i}$
+    \If{$r \leq \text{cumulative}$}
+        \State \Return $o_i$
+    \EndIf
+\EndFor
+\State \Return $o_n$ \Comment{Fallback}
+\end{algorithmic}
+\end{algorithm}
+
+Xác suất chọn operator $o_i$:
+\begin{equation}
+P(o_i) = \frac{w_{o_i}}{\sum_{j=1}^{n} w_{o_j}}
+\end{equation}
+
+\subsection{Mô Tả Chi Tiết Các Operators}
+
+\subsubsection{Truck Operators}
+
+\textbf{2-Opt:} Đảo ngược đoạn $[i, j]$ trong route.
+
+Cho route $R = \langle v_0, \ldots, v_{i-1}, v_i, v_{i+1}, \ldots, v_j, v_{j+1}, \ldots, v_n \rangle$:
+
+\begin{equation}
+R' = \langle v_0, \ldots, v_{i-1}, v_j, v_{j-1}, \ldots, v_{i+1}, v_i, v_{j+1}, \ldots, v_n \rangle
+\end{equation}
+
+\textbf{Swap:} Hoán đổi vị trí 2 nodes $v_i$ và $v_j$.
+
+\begin{equation}
+R' = R \text{ với } R'[i] = R[j], R'[j] = R[i]
+\end{equation}
+
+\textbf{Relocate:} Di chuyển node $v_i$ sang vị trí sau $v_j$.
+
+\textbf{Cross-Exchange:} Hoán đổi nodes giữa 2 trucks khác nhau.
+
+\subsubsection{Drone Operators}
+
+\textbf{Merge:} Gộp 2 trips cùng truck thành 1 trip lớn hơn.
+
+Điều kiện: $|\mathcal{C}_1| + |\mathcal{C}_2| \leq Q_d$ (drone capacity)
+
+\textbf{Split:} Tách trip có nhiều customers thành 2 trips theo ready time.
+
+\begin{equation}
+\text{threshold} = \frac{\min_c r_c + \max_c r_c}{2}
+\end{equation}
+
+\begin{align}
+\mathcal{C}_{\text{early}} &= \{c \in \mathcal{C} : r_c \leq \text{threshold}\} \\
+\mathcal{C}_{\text{late}} &= \{c \in \mathcal{C} : r_c > \text{threshold}\}
+\end{align}
+
+\textbf{InsertIntoTrip:} Tìm standalone type-D customers (đang được truck phục vụ) và thêm vào drone trip có sẵn.
+
+Điều kiện consolidation:
+\begin{align}
+|r_{\text{new}} - r_{\text{existing}}| &\leq 30 \text{ phút} \\
+d_{\text{drone}}(c_{\text{first}}, c_{\text{new}}) &\leq 10 \text{ km}
+\end{align}
+
+\subsection{Cấu Trúc Thuật Toán Chính}
+
+\begin{algorithm}[H]
+\caption{Adaptive Local Search}
+\begin{algorithmic}[1]
+\State \textbf{Input:} Initial solution $S_0$, max iterations $I_{\max}$
+\State \textbf{Output:} Improved solution $S^*$
+\State
+\State $S_{\text{current}} \gets S_0$, $S^* \gets S_0$, $\Cmax^* \gets \Cmax(S_0)$
+\State $\text{no\_improve} \gets 0$, $\text{perturbations} \gets 0$
+\State Initialize operator stats with $w_o = 1.0$ for all $o$
+\State
+\For{$\text{iter} = 1$ to $I_{\max}$}
+    \State $\text{improved} \gets \text{false}$
+    \State
+    \If{$\text{iter} \mod 10 = 0$}
+        \State \Call{UpdateOperatorWeights}{}
+    \EndIf
+    \State
+    \State \Comment{Phase 1: Truck Optimization}
+    \State $S' \gets$ \Call{OptimizeTruckRoutes}{$S_{\text{current}}$}
+    \If{$\Cmax(S') < \Cmax^* - 0.01$}
+        \State $S_{\text{current}} \gets S'$, $S^* \gets S'$, $\Cmax^* \gets \Cmax(S')$
+        \State $\text{improved} \gets \text{true}$
+    \EndIf
+    \State
+    \State \Comment{Phase 2: Drone Optimization}
+    \State $S' \gets$ \Call{OptimizeDroneTrips}{$S_{\text{current}}$}
+    \If{$\Cmax(S') < \Cmax^* - 0.01$}
+        \State $S_{\text{current}} \gets S'$, $S^* \gets S'$, $\Cmax^* \gets \Cmax(S')$
+        \State $\text{improved} \gets \text{true}$
+    \EndIf
+    \State
+    \If{not improved}
+        \State $\text{no\_improve} \gets \text{no\_improve} + 1$
+        \If{$\text{no\_improve} \geq 25$ and $\text{perturbations} < 8$}
+            \State $S_{\text{current}} \gets$ \Call{Perturb}{$S^*$, $3 + \text{perturbations}$}
+            \State $\text{perturbations} \gets \text{perturbations} + 1$
+            \State $\text{no\_improve} \gets 0$
+        \EndIf
+    \Else
+        \State $\text{no\_improve} \gets 0$
+    \EndIf
+    \State
+    \If{$\text{no\_improve} \geq 25$ and $\text{perturbations} \geq 8$}
+        \State \textbf{break}
+    \EndIf
+\EndFor
+\State
+\State \Return $S^*$
+\end{algorithmic}
+\end{algorithm}
+
+% ============================================================
+\section{Hàm Đánh Giá Sau Khi Thực Hiện Operator}
+% ============================================================
+
+\subsection{Quy Trình Đánh Giá}
+
+Sau khi mỗi operator thực hiện biến đổi solution, quy trình đánh giá bao gồm:
+
+\begin{enumerate}
+    \item \textbf{Kiểm tra tính khả thi} (Feasibility Check)
+    \item \textbf{Tính lại thời gian} (Recalculate Times)
+    \item \textbf{Tính $\Cmax$ mới} (Calculate New Makespan)
+    \item \textbf{So sánh và quyết định} (Compare and Accept/Reject)
+\end{enumerate}
+
+\subsection{Kiểm Tra Tính Khả Thi Truck Route}
+
+\begin{algorithm}[H]
+\caption{isTruckRouteFeasible}
+\begin{algorithmic}[1]
+\Function{IsTruckRouteFeasible}{$R$, $t$}
+    \State $\text{load} \gets 0$
+    \State $\text{picked\_pairs} \gets \emptyset$
+    \For{$i = 1$ to $|R| - 1$}
+        \State $v \gets R[i]$
+        \If{$v = \text{depot}$}
+            \State $\text{load} \gets 0$, $\text{picked\_pairs} \gets \emptyset$
+            \State \textbf{continue}
+        \EndIf
+        \State
+        \If{type$(v)$ = DL and pairId$(v) > 0$}
+            \If{pairId$(v) \notin \text{picked\_pairs}$}
+                \State \Return \textbf{false} \Comment{DL before P - violation}
+            \EndIf
+            \State $\text{picked\_pairs} \gets \text{picked\_pairs} \setminus \{\text{pairId}(v)\}$
+        \EndIf
+        \State
+        \If{type$(v)$ = P and pairId$(v) > 0$}
+            \State $\text{picked\_pairs} \gets \text{picked\_pairs} \cup \{\text{pairId}(v)\}$
+        \EndIf
+        \State
+        \State $\text{load} \gets \text{load} + \text{demand}(v)$
+        \If{$\text{load} > Q$ or $\text{load} < 0$}
+            \State \Return \textbf{false} \Comment{Capacity violation}
+        \EndIf
+    \EndFor
+    \State \Return \textbf{true}
+\EndFunction
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Kiểm Tra Tính Khả Thi Drone Trip}
+
+\begin{algorithm}[H]
+\caption{isDroneTripFeasible}
+\begin{algorithmic}[1]
+\Function{IsDroneTripFeasible}{$E$}
+    \If{$|\mathcal{C}_E| > Q_d$}
+        \State \Return \textbf{false} \Comment{Capacity violation}
+    \EndIf
+    \State
+    \For{each $c \in \mathcal{C}_E$}
+        \If{type$(c) \neq$ D or readyTime$(c) \leq 0$}
+            \State \Return \textbf{false} \Comment{Not drone-eligible}
+        \EndIf
+    \EndFor
+    \State
+    \If{$|\mathcal{C}_E| > 1$} \Comment{Consolidation constraints}
+        \State $r_1 \gets$ readyTime$(\mathcal{C}_E[0])$
+        \For{$i = 1$ to $|\mathcal{C}_E| - 1$}
+            \If{$|$readyTime$(\mathcal{C}_E[i]) - r_1| > 30$}
+                \State \Return \textbf{false}
+            \EndIf
+            \If{$d_{\text{drone}}(\mathcal{C}_E[0], \mathcal{C}_E[i]) > 10$}
+                \State \Return \textbf{false}
+            \EndIf
+        \EndFor
+    \EndIf
+    \State
+    \If{$T^{\text{flight}}_E > L_d$}
+        \State \Return \textbf{false} \Comment{Endurance violation}
+    \EndIf
+    \State
+    \State \Return \textbf{true}
+\EndFunction
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Tính Lại Thời Gian và $\Cmax$}
+
+Sau khi biến đổi solution, các bước tính lại:
+
+\begin{enumerate}
+    \item \texttt{recalculateTruckTimes(sol)}: Tính lại arrival/departure times cho tất cả truck routes
+    \item \texttt{recalculateDroneTimes(sol)}: Tính lại drone trip times, cập nhật truck wait times nếu cần
+    \item \texttt{calculateCmax(sol)}: Tính makespan mới
+\end{enumerate}
+
+\begin{equation}
+\Cmax^{\text{new}} = \max \left\{ \max_{t} T^{comp}_t, \max_{k} T^{return}_k \right\}
+\end{equation}
+
+\subsection{Tiêu Chí Chấp Nhận}
+
+Operator được coi là thành công nếu:
+
+\begin{equation}
+\Cmax^{\text{new}} < \Cmax^{\text{current}} - \epsilon
+\end{equation}
+
+Với $\epsilon = 0.01$ phút (tolerance để tránh floating point issues).
+
+Improvement được ghi nhận:
+\begin{equation}
+\Delta = \Cmax^{\text{current}} - \Cmax^{\text{new}}
+\end{equation}
+
+\subsection{Cập Nhật Thống Kê Operator}
+
+\begin{algorithm}[H]
+\caption{Update Operator Statistics}
+\begin{algorithmic}[1]
+\Procedure{UpdateStats}{$o$, success, $\Delta$}
+    \State $n_o^{\text{att}} \gets n_o^{\text{att}} + 1$
+    \If{success}
+        \State $n_o^{\text{suc}} \gets n_o^{\text{suc}} + 1$
+        \State $\Delta_o^{\text{total}} \gets \Delta_o^{\text{total}} + \Delta$
+    \EndIf
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+% ============================================================
+\section{Cơ Chế Perturbation}
+% ============================================================
+
+Khi thuật toán bị kẹt (25 iterations không cải thiện), perturbation được áp dụng:
+
+\begin{equation}
+\text{strength} = 3 + \text{perturbations\_used}
+\end{equation}
+
+Các loại perturbation (chọn ngẫu nhiên):
+\begin{enumerate}
+    \item \textbf{Truck perturbation:} Random swap 2 nodes trong route
+    \item \textbf{Drone perturbation (swap):} Swap customers giữa 2 trips
+    \item \textbf{Drone perturbation (reassign):} Đổi drone assignment
+\end{enumerate}
+
+Mỗi lần perturbation, áp dụng \texttt{strength} lần biến đổi ngẫu nhiên.
+
+% ============================================================
+\section{Tham Số và Cấu Hình}
+% ============================================================
+
+\begin{table}[H]
+\centering
+\caption{Các tham số của thuật toán}
+\begin{tabular}{llc}
+\toprule
+\textbf{Tham số} & \textbf{Mô tả} & \textbf{Giá trị} \\
+\midrule
+$I_{\max}$ & Số iterations tối đa & 50-500 \\
+max\_no\_improve & Ngưỡng không cải thiện & 25 \\
+max\_perturbations & Số lần perturbation tối đa & 8 \\
+weight\_update\_freq & Tần suất cập nhật trọng số & 10 \\
+$w_{\text{base}}$ & Trọng số cơ bản & 0.5 \\
+$\alpha$ & Hệ số success rate & 2.0 \\
+$\beta$ & Hệ số improvement & 0.1 \\
+$w_{\min}$, $w_{\max}$ & Giới hạn trọng số & 0.1, 5.0 \\
+$\epsilon$ & Tolerance improvement & 0.01 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================
+\section{Kết Luận}
+% ============================================================
+
+Thuật toán Adaptive Local Search được thiết kế với các đặc điểm nổi bật:
+
+\begin{enumerate}
+    \item \textbf{Đa dạng operators:} 11 operators chia thành 2 nhóm (Truck và Drone) cho phép khám phá không gian lời giải hiệu quả.
+    
+    \item \textbf{Adaptive Selection:} Cơ chế chọn operator dựa trên hiệu suất thực tế, tự động ưu tiên operators hoạt động tốt.
+    
+    \item \textbf{Consolidation Support:} Hỗ trợ gộp nhiều customers vào một drone trip để tối ưu hóa việc sử dụng drone.
+    
+    \item \textbf{Perturbation Mechanism:} Cơ chế escape local optima với độ mạnh tăng dần.
+    
+    \item \textbf{Feasibility Checking:} Kiểm tra đầy đủ các ràng buộc về capacity, precedence, và endurance.
+\end{enumerate}
+
+\end{document}

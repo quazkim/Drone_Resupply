@@ -1,4 +1,4 @@
-#include "pdp_reader.h"
+﻿#include "pdp_reader.h"
 #include "pdp_utils.h"  
 #include <iostream>
 #include <fstream>
@@ -8,13 +8,13 @@
 
 using namespace std;
 
-// === CÁC HÀM TIỆN ÍCH KHOẢNG CÁCH (Manhattan/Euclidean) ===
+// === C├üC H├ÇM TIß╗åN ├ìCH KHOß║óNG C├üCH (Manhattan/Euclidean) ===
 double manhattanDistance(double x1, double y1, double x2, double y2) {
     return abs(x1 - x2) + abs(y1 - y2);
 }
-// euclideanDistance đã được khai báo trong pdp_utils.h
+// euclideanDistance ─æ├ú ─æ╞░ß╗úc khai b├ío trong pdp_utils.h
 
-// Xây dựng CẢ HAI ma trận khoảng cách
+// X├óy dß╗▒ng Cß║ó HAI ma trß║¡n khoß║úng c├ích
 void buildAllDistanceMatrices(PDPData& data) {
     int n = data.numNodes;
     data.truckDistMatrix.assign(n, vector<double>(n, 0.0));
@@ -30,7 +30,7 @@ void buildAllDistanceMatrices(PDPData& data) {
             data.droneDistMatrix[i][j] = eu_dist;
             data.droneDistMatrix[j][i] = eu_dist;
             
-            // 2. Truck: Manhattan (Đường phố)
+            // 2. Truck: Manhattan (─É╞░ß╗¥ng phß╗æ)
             double mh_dist = manhattanDistance(c1.first, c1.second, c2.first, c2.second);
             data.truckDistMatrix[i][j] = mh_dist;
             data.truckDistMatrix[j][i] = mh_dist;
@@ -40,20 +40,20 @@ void buildAllDistanceMatrices(PDPData& data) {
 }
 
 
-// === HÀM ĐỌC FILE CHÍNH ===
+// === H├ÇM ─Éß╗îC FILE CH├ìNH ===
 
 bool readPDPFile(const string& filename, PDPData& data) {
     ifstream file(filename);
     if (!file.is_open()) {
-        cerr << "❌ Cannot open file: " << filename << endl;
+        cerr << "Cannot open file: " << filename << endl;
         return false;
     }
     
     string line;
     
-    // Bỏ qua header
+    // Bß╗Å qua header
     getline(file, line); 
-    cout << "📖 Reading: " << filename << endl;
+    cout << "Reading: " << filename << endl;
     
     // Clear data
     data = PDPData(); 
@@ -81,21 +81,21 @@ bool readPDPFile(const string& filename, PDPData& data) {
     }
     file.close();
     
-    // BƯỚC 1: XÁC ĐỊNH VÀ CHÈN DEPOT VÀO NODE 0 (0-BASED)
+    // B╞»ß╗ÜC 1: X├üC ─Éß╗èNH V├Ç CH├êN DEPOT V├ÇO NODE 0 (0-BASED)
     data.coordinates.push_back(data.useDepotCenter ? data.depotCenter : data.depotBorder);
     data.nodeTypes.push_back("D");
     data.readyTimes.push_back(0);
     data.pairIds.push_back(0);
     data.demands.push_back(0); // Depot demand = 0
     
-    // BƯỚC 2: CHÈN CUSTOMER VÀO SAU DEPOT (ARRAY INDEX 1, 2, 3...)
+    // B╞»ß╗ÜC 2: CH├êN CUSTOMER V├ÇO SAU DEPOT (ARRAY INDEX 1, 2, 3...)
     for (size_t i = 0; i < tempCoords.size(); ++i) {
         data.coordinates.push_back(tempCoords[i]);
         data.nodeTypes.push_back(tempTypes[i]);
         data.readyTimes.push_back(tempReadyTimes[i]);
         data.pairIds.push_back(tempPairIds[i]);
         
-        // SUY LUẬN DEMAND (Theo file README: qi = 1)
+        // SUY LUß║¼N DEMAND (Theo file README: qi = 1)
         int demand = 0;
         if (tempTypes[i] == "P") demand = 1; 
         else if (tempTypes[i] == "DL") demand = -1; 
@@ -103,10 +103,10 @@ bool readPDPFile(const string& filename, PDPData& data) {
         data.demands.push_back(demand);
     }
 
-    data.depotIndex = 0; // Depot là node 0 (0-based indexing)
+    data.depotIndex = 0; // Depot l├á node 0 (0-based indexing)
     data.numNodes = data.coordinates.size();
     
-    // BƯỚC 3: XÂY DỰNG MA TRẬN KHOẢNG CÁCH
+    // B╞»ß╗ÜC 3: X├éY Dß╗░NG MA TRß║¼N KHOß║óNG C├üCH
     buildAllDistanceMatrices(data);
 
     data.numCustomers = 0;
@@ -122,10 +122,10 @@ bool readPDPFile(const string& filename, PDPData& data) {
 
 void showPDPInfo(const PDPData& data) {
     cout << "\nPDP Problem Summary:" << endl;
-    cout << "├─ Total nodes: " << data.numNodes << endl;
-    cout << "├─ Customer nodes (P, DL, D): " << data.numCustomers << endl;
-    cout << "├─ Depot array index: " << data.depotIndex << endl;
-    cout << "└─ Trucks: " << data.numTrucks << " (Capacity: " << data.truckCapacity << ")" << endl;
+    cout << "Γö£ΓöÇ Total nodes: " << data.numNodes << endl;
+    cout << "Γö£ΓöÇ Customer nodes (P, DL, D): " << data.numCustomers << endl;
+    cout << "Γö£ΓöÇ Depot array index: " << data.depotIndex << endl;
+    cout << "ΓööΓöÇ Trucks: " << data.numTrucks << " (Capacity: " << data.truckCapacity << ")" << endl;
     
     int depots = 0, pickups = 0, deliveries = 0, c1_deliveries = 0;
     for (int i = 0; i < data.nodeTypes.size(); ++i) {
@@ -153,7 +153,7 @@ void showPDPInfo(const PDPData& data) {
     cout << "P-D pairs (C2): ";
     for (auto& pair : pairs) {
         if (pair.second.first > 0 && pair.second.second > 0) {
-            cout << "[" << pair.second.first << "(P)→" << pair.second.second << "(DL)] ";
+            cout << "[" << pair.second.first << "(P)ΓåÆ" << pair.second.second << "(DL)] ";
         }
     }
     cout << endl;

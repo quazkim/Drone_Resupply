@@ -1,4 +1,4 @@
-#include "pdp_tabu.h"
+﻿#include "pdp_tabu.h"
 #include "pdp_fitness.h"
 #include <algorithm>
 #include <random>
@@ -361,7 +361,7 @@ vector<int> TabuSearchPDP::run(const vector<int>& initialSeq) {
     const double delta1 = 0.5, delta2 = 0.3, delta3 = 0.2;
     int segmentLength = 100;
     int noImprovement = 0;
-    const int maxNoImprovement = min(1000, maxIterations / 2);
+    const int maxNoImprovement = min(50, maxIterations / 2);
     
     for (int iter = 0; iter < maxIterations; ++iter) {
         // Select move type using adaptive weights

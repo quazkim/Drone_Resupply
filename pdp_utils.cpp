@@ -1,4 +1,4 @@
-#include "pdp_utils.h"
+﻿#include "pdp_utils.h"
 #include <iostream>
 #include <cmath>
 #include <iomanip>
@@ -89,19 +89,30 @@ void printSolution(const PDPSolution& solution, const PDPData& data) {
     
     // In chi tiet drone resupply
     if (!solution.resupply_events.empty()) {
-        cout << "\nCHI TIET DRONE RESUPPLY:" << endl;
+        cout << "\nCHI TIET DRONE RESUPPLY (WITH CONSOLIDATION):" << endl;
         for (size_t i = 0; i < solution.resupply_events.size(); i++) {
             const auto& event = solution.resupply_events[i];
-            cout << "\n   +-- Resupply #" << (i + 1) << " ----------------------------------" << endl;
-            cout << "   | Khach hang: Node " << event.customer_id << endl;
-            cout << "   | Drone: Drone " << event.drone_id << endl;
-            cout << "   | Gap xe: Xe " << event.truck_id << endl;
+            cout << "\n   +-- Resupply Trip #" << (i + 1) << " ----------------------------------" << endl;
+            cout << "   | Drone: Drone " << event.drone_id << " | Xe: Xe " << event.truck_id << endl;
+            cout << "   | So khach hang: " << event.customer_ids.size() << " customers" << endl;
+            cout << "   | Customers: ";
+            for (size_t j = 0; j < event.customer_ids.size(); j++) {
+                cout << "Node " << event.customer_ids[j];
+                if (j < event.customer_ids.size() - 1) cout << ", ";
+            }
+            cout << endl;
+            cout << "   | Total flight time: " << fixed << setprecision(1) << event.total_flight_time << " phut" << endl;
             cout << "   | Timeline:" << endl;
             cout << "   |   - Drone roi depot:     " << setw(6) << fixed << setprecision(1) << event.drone_depart_time << " phut" << endl;
-            cout << "   |   - Drone den khach:     " << setw(6) << event.drone_arrive_time << " phut" << endl;
-            cout << "   |   - Xe den khach:        " << setw(6) << event.truck_arrive_time << " phut" << endl;
-            cout << "   |   - Bat dau resupply:    " << setw(6) << event.resupply_start << " phut" << endl;
-            cout << "   |   - Ket thuc resupply:   " << setw(6) << event.resupply_end << " phut" << endl;
+            
+            for (size_t j = 0; j < event.customer_ids.size(); j++) {
+                cout << "   |   [Customer " << event.customer_ids[j] << "]" << endl;
+                cout << "   |     - Drone den:        " << setw(6) << event.arrive_times[j] << " phut" << endl;
+                cout << "   |     - Xe den:           " << setw(6) << event.truck_arrive_times[j] << " phut" << endl;
+                cout << "   |     - Bat dau resupply: " << setw(6) << event.resupply_starts[j] << " phut" << endl;
+                cout << "   |     - Ket thuc:         " << setw(6) << event.resupply_ends[j] << " phut" << endl;
+            }
+            
             cout << "   |   - Drone ve depot:      " << setw(6) << event.drone_return_time << " phut" << endl;
             cout << "   +-----------------------------------------------------" << endl;
         }

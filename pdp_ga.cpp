@@ -1,4 +1,4 @@
-#include "pdp_ga.h"
+﻿#include "pdp_ga.h"
 #include "pdp_tabu.h"
 #include "pdp_types.h"
 #include "pdp_fitness.h"
@@ -37,19 +37,19 @@ struct AdaptiveParams {
         mutationSuccess(5, 0.0), mutationUsage(5, 0), mutationRates(5, 0.2),
         currentMutationRate(baseRate), baseMutationRate(baseRate), noImprovementCount(0) {}
     
-    // Cập nhật success rate cho crossover
+    // Cß║¡p nhß║¡t success rate cho crossover
     void updateCrossoverSuccess(int type, bool improved) {
         crossoverUsage[type]++;
         if (improved) crossoverSuccess[type]++;
     }
     
-    // Cập nhật success rate cho mutation
+    // Cß║¡p nhß║¡t success rate cho mutation
     void updateMutationSuccess(int type, bool improved) {
         mutationUsage[type]++;
         if (improved) mutationSuccess[type]++;
     }
     
-    // Điều chỉnh crossover rates dựa trên success rate
+    // ─Éiß╗üu chß╗ënh crossover rates dß╗▒a tr├¬n success rate
     void adaptCrossoverRates() {
         double totalSuccess = 0;
         for (int i = 0; i < 4; ++i) {
@@ -70,7 +70,7 @@ struct AdaptiveParams {
         }
     }
     
-    // Điều chỉnh mutation rates dựa trên success rate
+    // ─Éiß╗üu chß╗ënh mutation rates dß╗▒a tr├¬n success rate
     void adaptMutationRates() {
         double totalSuccess = 0;
         for (int i = 0; i < 5; ++i) {
@@ -91,7 +91,7 @@ struct AdaptiveParams {
         }
     }
     
-    // Điều chỉnh mutation rate tổng thể
+    // ─Éiß╗üu chß╗ënh mutation rate tß╗òng thß╗â
     void adaptMutationRate() {
         if (noImprovementCount > 5) {
             currentMutationRate = min(0.5, currentMutationRate * 1.2);
@@ -100,13 +100,13 @@ struct AdaptiveParams {
         }
     }
     
-    // Chọn crossover type dựa trên rates
+    // Chß╗ìn crossover type dß╗▒a tr├¬n rates
     int selectCrossoverType(mt19937& gen) {
         discrete_distribution<> dist(crossoverRates.begin(), crossoverRates.end());
         return dist(gen);
     }
     
-    // Chọn mutation type dựa trên rates
+    // Chß╗ìn mutation type dß╗▒a tr├¬n rates
     int selectMutationType(mt19937& gen) {
         discrete_distribution<> dist(mutationRates.begin(), mutationRates.end());
         return dist(gen);
@@ -207,15 +207,15 @@ vector<int> cycleCrossover(const vector<int>& parent1, const vector<int>& parent
     return child;
 }
 
-// Edge Recombination Crossover (ERX) - Bảo toàn các cạnh từ cha mẹ
+// Edge Recombination Crossover (ERX) - Bß║úo to├án c├íc cß║ính tß╗½ cha mß║╣
 vector<int> edgeCrossover(const vector<int>& parent1, const vector<int>& parent2, mt19937& gen) {
     int n = parent1.size();
     vector<int> child;
     
-    // Tạo bảng adjacency từ cả hai cha mẹ
+    // Tß║ío bß║úng adjacency tß╗½ cß║ú hai cha mß║╣
     map<int, set<int>> edges;
     
-    // Thêm edges từ parent1
+    // Th├¬m edges tß╗½ parent1
     for (int i = 0; i < n; ++i) {
         int current = parent1[i];
         int prev = parent1[(i - 1 + n) % n];
@@ -224,7 +224,7 @@ vector<int> edgeCrossover(const vector<int>& parent1, const vector<int>& parent2
         edges[current].insert(next);
     }
     
-    // Thêm edges từ parent2
+    // Th├¬m edges tß╗½ parent2
     for (int i = 0; i < n; ++i) {
         int current = parent2[i];
         int prev = parent2[(i - 1 + n) % n];
@@ -233,7 +233,7 @@ vector<int> edgeCrossover(const vector<int>& parent1, const vector<int>& parent2
         edges[current].insert(next);
     }
     
-    // Bắt đầu với node ngẫu nhiên
+    // Bß║»t ─æß║ºu vß╗¢i node ngß║½u nhi├¬n
     uniform_int_distribution<> dist(0, n - 1);
     int current = parent1[dist(gen)];
     child.push_back(current);
@@ -242,14 +242,14 @@ vector<int> edgeCrossover(const vector<int>& parent1, const vector<int>& parent2
     used.insert(current);
     
     while (child.size() < n) {
-        // Xóa current khỏi tất cả adjacency lists
+        // X├│a current khß╗Åi tß║Ñt cß║ú adjacency lists
         for (auto& pair : edges) {
             pair.second.erase(current);
         }
         
         int next = -1;
         
-        // Tìm neighbor với ít connections nhất
+        // T├¼m neighbor vß╗¢i ├¡t connections nhß║Ñt
         int minConnections = INT_MAX;
         for (int neighbor : edges[current]) {
             if (used.find(neighbor) == used.end()) {
@@ -261,7 +261,7 @@ vector<int> edgeCrossover(const vector<int>& parent1, const vector<int>& parent2
             }
         }
         
-        // Nếu không tìm thấy, chọn node chưa dùng ngẫu nhiên
+        // Nß║┐u kh├┤ng t├¼m thß║Ñy, chß╗ìn node ch╞░a d├╣ng ngß║½u nhi├¬n
         if (next == -1) {
             vector<int> unused;
             for (int i = 0; i < n; ++i) {
@@ -281,11 +281,11 @@ vector<int> edgeCrossover(const vector<int>& parent1, const vector<int>& parent2
             used.insert(next);
             current = next;
         } else {
-            break; // Không thể tiếp tục
+            break; // Kh├┤ng thß╗â tiß║┐p tß╗Ñc
         }
     }
     
-    // Đảm bảo child có đủ n phần tử
+    // ─Éß║úm bß║úo child c├│ ─æß╗º n phß║ºn tß╗¡
     if (child.size() < n) {
         for (int i = 0; i < n; ++i) {
             int node = parent1[i];
@@ -332,7 +332,7 @@ void scrambleMutation(vector<int>& seq, mt19937& gen) {
     shuffle(seq.begin() + i, seq.begin() + j + 1, gen);
 }
 
-// Insertion Mutation - Di chuyển một phần tử đến vị trí khác
+// Insertion Mutation - Di chuyß╗ân mß╗Öt phß║ºn tß╗¡ ─æß║┐n vß╗ï tr├¡ kh├íc
 void insertionMutation(vector<int>& seq, mt19937& gen) {
     if (seq.size() < 2) return;
     
@@ -355,7 +355,7 @@ void insertionMutation(vector<int>& seq, mt19937& gen) {
     seq[toPos] = element;
 }
 
-// Displacement Mutation - Di chuyển một đoạn con đến vị trí khác
+// Displacement Mutation - Di chuyß╗ân mß╗Öt ─æoß║ín con ─æß║┐n vß╗ï tr├¡ kh├íc
 void displacementMutation(vector<int>& seq, mt19937& gen) {
     if (seq.size() < 3) return;
     
@@ -364,14 +364,14 @@ void displacementMutation(vector<int>& seq, mt19937& gen) {
     int end = dist(gen);
     if (start > end) swap(start, end);
     
-    // Đảm bảo có ít nhất 1 phần tử để di chuyển
+    // ─Éß║úm bß║úo c├│ ├¡t nhß║Ñt 1 phß║ºn tß╗¡ ─æß╗â di chuyß╗ân
     if (start == end) {
         if (end < (int)seq.size() - 1) end++;
         else if (start > 0) start--;
         else return;
     }
     
-    // Chọn vị trí đích (không trùng với đoạn hiện tại)
+    // Chß╗ìn vß╗ï tr├¡ ─æ├¡ch (kh├┤ng tr├╣ng vß╗¢i ─æoß║ín hiß╗çn tß║íi)
     vector<int> validPositions;
     for (int i = 0; i <= (int)seq.size() - (end - start + 1); ++i) {
         if (i < start || i > end - (end - start)) {
@@ -384,26 +384,26 @@ void displacementMutation(vector<int>& seq, mt19937& gen) {
     uniform_int_distribution<> posDist(0, validPositions.size() - 1);
     int newPos = validPositions[posDist(gen)];
     
-    // Lưu đoạn cần di chuyển
+    // L╞░u ─æoß║ín cß║ºn di chuyß╗ân
     vector<int> segment(seq.begin() + start, seq.begin() + end + 1);
     
-    // Xóa đoạn cũ
+    // X├│a ─æoß║ín c┼⌐
     seq.erase(seq.begin() + start, seq.begin() + end + 1);
     
-    // Tính newPos sau khi xóa và đảm bảo hợp lệ
+    // T├¡nh newPos sau khi x├│a v├á ─æß║úm bß║úo hß╗úp lß╗ç
     if (newPos > start) {
         newPos -= (end - start + 1);
     }
     newPos = max(0, min(newPos, (int)seq.size()));
     
-    // Chèn vào vị trí mới
+    // Ch├¿n v├áo vß╗ï tr├¡ mß╗¢i
     seq.insert(seq.begin() + newPos, segment.begin(), segment.end());
 }
 
 // ============ REPAIR OPERATOR ============
 
 void repairSequence(vector<int>& seq, const PDPData& data, mt19937& gen) {
-    // Đếm số lần xuất hiện của mỗi customer
+    // ─Éß║┐m sß╗æ lß║ºn xuß║Ñt hiß╗çn cß╗ºa mß╗ùi customer
     map<int, int> count;
     for (int id : seq) {
         if (data.isCustomer(id)) {
@@ -411,7 +411,7 @@ void repairSequence(vector<int>& seq, const PDPData& data, mt19937& gen) {
         }
     }
     
-    // Tìm customer bị thiếu
+    // T├¼m customer bß╗ï thiß║┐u
     vector<int> missing;
     for (int i = 0; i < data.numNodes; ++i) {
         if (data.isCustomer(i) && count[i] == 0) {
@@ -419,7 +419,7 @@ void repairSequence(vector<int>& seq, const PDPData& data, mt19937& gen) {
         }
     }
     
-    // Loại bỏ duplicate và thay bằng missing
+    // Loß║íi bß╗Å duplicate v├á thay bß║▒ng missing
     shuffle(missing.begin(), missing.end(), gen);
     int missingIdx = 0;
     
@@ -434,7 +434,7 @@ void repairSequence(vector<int>& seq, const PDPData& data, mt19937& gen) {
         }
     }
     
-    // Thêm missing còn lại
+    // Th├¬m missing c├▓n lß║íi
     for (int i = missingIdx; i < (int)missing.size(); ++i) {
         seq.push_back(missing[i]);
     }
@@ -464,7 +464,7 @@ vector<int> tournamentSelection(const vector<vector<int>>& population,
 
 // ============ ADAPTIVE EVALUATION ============
 
-// Đánh giá xem offspring có tốt hơn parents không
+// ─É├ính gi├í xem offspring c├│ tß╗æt h╞ín parents kh├┤ng
 bool evaluateImprovement(const vector<int>& offspring, const vector<int>& parent1, 
                         const vector<int>& parent2, const PDPData& data) {
     PDPSolution offspringSol = decodeAndEvaluate(offspring, data);
@@ -480,7 +480,7 @@ bool evaluateImprovement(const vector<int>& offspring, const vector<int>& parent
     return offspringFit < bestParentFit;
 }
 
-// Đánh giá xem mutated solution có tốt hơn original không
+// ─É├ính gi├í xem mutated solution c├│ tß╗æt h╞ín original kh├┤ng
 bool evaluateMutationImprovement(const vector<int>& mutated, const vector<int>& original, 
                                const PDPData& data) {
     PDPSolution mutatedSol = decodeAndEvaluate(mutated, data);
@@ -535,7 +535,7 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
          << bestSolution.totalCost << " (penalty: " << bestSolution.totalPenalty << ")" << endl;
     
     int noImprovementCounter = 0;
-    int tabuThreshold = maxGenerations / 10;
+    int tabuThreshold = maxGenerations / 20;
     bool tabuApplied = false;
     int adaptationInterval = max(5, maxGenerations / 20);
     
@@ -570,7 +570,7 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
             repairSequence(child, data, rng);
             offspring.push_back(child);
             
-            // Đánh giá hiệu suất crossover
+            // ─É├ính gi├í hiß╗çu suß║Ñt crossover
             bool improved = evaluateImprovement(child, parent1, parent2, data);
             adaptiveParams.updateCrossoverSuccess(crossoverType, improved);
         }
@@ -599,7 +599,7 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
             
             repairSequence(offspring[idx], data, rng);
             
-            // Đánh giá hiệu suất mutation
+            // ─É├ính gi├í hiß╗çu suß║Ñt mutation
             bool improved = evaluateMutationImprovement(offspring[idx], original, data);
             adaptiveParams.updateMutationSuccess(mutationType, improved);
         }
@@ -667,7 +667,7 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
             adaptiveParams.adaptMutationRates();
             adaptiveParams.adaptMutationRate();
             
-            // In thống kê adaptive (mỗi 10 generations)
+            // In thß╗æng k├¬ adaptive (mß╗ùi 10 generations)
             if (generation % (adaptationInterval * 2) == 0) {
                 cout << "[ADAPT] Gen " << generation << " - Crossover rates: ";
                 for (int i = 0; i < 4; ++i) {
@@ -677,8 +677,8 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
             }
         }
         
-        // 2.5: Apply Tabu Search after 10% generations without improvement
-        if (noImprovementCounter >= tabuThreshold && !tabuApplied) {
+        // 2.5: Apply Tabu Search after 20% generations without improvement
+        if (noImprovementCounter >= tabuThreshold) {
             cout << "\n[TABU] No improvement for " << tabuThreshold 
                  << " generations. Applying Tabu Search..." << endl;
             
@@ -692,7 +692,7 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
             
             // Apply tabu to best sequence
             try {
-                bestSequence = tabuSearchPDP(bestSequence, data, 100);
+                bestSequence = tabuSearchPDP(bestSequence, data, 50);
                 bestSolution = decodeAndEvaluate(bestSequence, data);
                 
                 // Validate after Tabu
@@ -724,7 +724,7 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
     cout << "Final best cost: " << fixed << setprecision(2)
          << bestSolution.totalCost << " (penalty: " << bestSolution.totalPenalty << ")" << endl;
     
-    // In thống kê adaptive cuối cùng
+    // In thß╗æng k├¬ adaptive cuß╗æi c├╣ng
     cout << "\n[ADAPTIVE STATS]" << endl;
     cout << "Final mutation rate: " << fixed << setprecision(3) << adaptiveParams.currentMutationRate << endl;
     cout << "Crossover success rates: ";

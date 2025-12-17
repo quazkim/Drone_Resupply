@@ -1,4 +1,4 @@
-#ifndef PDP_TYPES_H
+﻿#ifndef PDP_TYPES_H
 #define PDP_TYPES_H
 
 #include <vector>
@@ -8,15 +8,15 @@
 using namespace std;
 
 struct PDPData {
-    // --- VRP Instance (Giữ nguyên của bạn) ---
+    // --- VRP Instance (Giß╗» nguy├¬n cß╗ºa bß║ín) ---
     int numNodes = 0;                    
-    int numCustomers = 0; // Sẽ được cập nhật để đếm cả P, DL, D
+    int numCustomers = 0; // Sß║╜ ─æ╞░ß╗úc cß║¡p nhß║¡t ─æß╗â ─æß║┐m cß║ú P, DL, D
     int numTrucks = 2;                   
-    int truckCapacity = 50; // Giữ nguyên 50 từ file của bạn             
+    int truckCapacity = 50; // Giß╗» nguy├¬n 50 tß╗½ file cß╗ºa bß║ín             
     double truckSpeed = 30.0;            
-    double truckServiceTime = 3.0; // (δ) Thời gian phục vụ P/DL (phút)       
-    double depotReceiveTime = 5.0; // (δt) Thời gian xe tải ở depot (phút)       
-    int depotIndex = 0; // Index 0-based của depot
+    double truckServiceTime = 3.0; // (╬┤) Thß╗¥i gian phß╗Ñc vß╗Ñ P/DL (ph├║t)       
+    double depotReceiveTime = 5.0; // (╬┤t) Thß╗¥i gian xe tß║úi ß╗ƒ depot (ph├║t)       
+    int depotIndex = 0; // Index 0-based cß╗ºa depot
     vector<pair<double,double>> coordinates; 
     vector<string> nodeTypes;               
     vector<int> readyTimes;                 
@@ -27,31 +27,32 @@ struct PDPData {
     pair<double, double> depotBorder = {0.0, 10.0};   // Border depot
     bool useDepotCenter = true; // true = center (10,10), false = border (0,10)
 
-    // --- CÁC TRƯỜNG MỚI (BẮT BUỘC) ---
-    vector<int> demands;                    // (Cần cho hàm fitness)
+    // --- C├üC TR╞»ß╗£NG Mß╗ÜI (Bß║«T BUß╗ÿC) ---
+    vector<int> demands;                    // (Cß║ºn cho h├ám fitness)
     
-    // --- Drone Params (BẮT BUỘC) ---
-    int numDrones = 2;                   // (d) Số lượng drone (giả định vô hạn trong Giai đoạn 1)
+    // --- Drone Params (Bß║«T BUß╗ÿC) ---
+    int numDrones = 2;                   // (d) Sß╗æ l╞░ß╗úng drone (giß║ú ─æß╗ïnh v├┤ hß║ín trong Giai ─æoß║ín 1)
+    int droneCapacity = 2;               // (Q) Sß╗æ orders mß╗ùi trip (2 cho Γëñ20 customers, 10 cho large)
     double droneSpeed = 60.0;            // km/h
-    double droneEndurance = 90.0;        // (L_d) Thời gian bay tối đa (phút)
-    double resupplyTime = 5.0;           // (Δ) Thời gian resupply (phút)
-    double depotDroneLoadTime = 5.0;     // (δd) Thời gian drone lấy hàng ở depot (phút)
+    double droneEndurance = 90.0;        // (L_d) Thß╗¥i gian bay tß╗æi ─æa (ph├║t)
+    double resupplyTime = 5.0;           // (╬ö) Thß╗¥i gian resupply tß║íi Mß╗ûI ─æiß╗âm (ph├║t)
+    double depotDroneLoadTime = 5.0;     // (╬┤d) Thß╗¥i gian drone lß║Ñy h├áng ß╗ƒ depot (ph├║t)
 
-    // --- Distance Matrix (SỬA LỖI LOGIC: Cần 2 ma trận) ---
+    // --- Distance Matrix (Sß╗¼A Lß╗ûI LOGIC: Cß║ºn 2 ma trß║¡n) ---
     vector<vector<double>> truckDistMatrix; // Manhattan (Truck)
     vector<vector<double>> droneDistMatrix; // Euclidean (Drone)
 
 
-    // --- Helpers (Cập nhật) ---
+    // --- Helpers (Cß║¡p nhß║¡t) ---
     int getSeparatorStart() const {
-        return numNodes; // Separator bắt đầu từ số nút (total nodes)
+        return numNodes; // Separator bß║»t ─æß║ºu tß╗½ sß╗æ n├║t (total nodes)
     }
     bool isSeparator(int id) const {
         int s = getSeparatorStart();
         return (id >= s && id < s + numTrucks);
     }
     
-    // isCustomer: ID là 0-based array index
+    // isCustomer: ID l├á 0-based array index
     bool isCustomer(int id) const {
         if (id < 0 || id >= numNodes) return false; 
         if (id == depotIndex) return false; 
@@ -63,41 +64,51 @@ struct PDPData {
         return (id == depotIndex); // depotIndex = 0
     }
     
+    // Tß╗▒ ─æß╗Öng set drone capacity theo instance size (paper spec)
+    int getDroneCapacity() const {
+        if (numCustomers <= 20) return 2;  // Small instances
+        return 10;  // Large instances
+    }
+    
 };
 
-// Cấu trúc lưu thông tin chi tiết về resupply
+// Cß║Ñu tr├║c l╞░u th├┤ng tin chi tiß║┐t vß╗ü resupply
 struct ResupplyEvent {
-    int customer_id;          // ID khách hàng được resupply
-    int drone_id;             // Drone nào phục vụ
-    int truck_id;             // Xe tải nào gặp
-    double drone_depart_time; // Drone rời depot lúc nào
-    double drone_arrive_time; // Drone đến khách lúc nào
-    double truck_arrive_time; // Xe đến khách lúc nào
-    double resupply_start;    // Bắt đầu resupply lúc nào
-    double resupply_end;      // Kết thúc resupply lúc nào
-    double drone_return_time; // Drone về depot lúc nào
+    vector<int> customer_ids;      // Danh s├ích kh├ích h├áng ─æ╞░ß╗úc resupply trong trip n├áy
+    int drone_id;                  // Drone n├áo phß╗Ñc vß╗Ñ
+    int truck_id;                  // Xe tß║úi n├áo gß║╖p
+    double drone_depart_time;      // Drone rß╗¥i depot l├║c n├áo
+    vector<double> arrive_times;   // Thß╗¥i gian ─æß║┐n tß╗½ng kh├ích h├áng
+    vector<double> truck_arrive_times; // Thß╗¥i gian xe ─æß║┐n tß╗½ng ─æiß╗âm
+    vector<double> resupply_starts;    // Bß║»t ─æß║ºu resupply tß║íi tß╗½ng ─æiß╗âm
+    vector<double> resupply_ends;      // Kß║┐t th├║c resupply tß║íi tß╗½ng ─æiß╗âm
+    double drone_return_time;      // Drone vß╗ü depot l├║c n├áo
+    double total_flight_time;      // Tß╗òng thß╗¥i gian bay (─æß╗â check endurance)
 };
 
-// Cấu trúc lưu thông tin chi tiết về route của từng xe
+// Cß║Ñu tr├║c l╞░u th├┤ng tin chi tiß║┐t vß╗ü route cß╗ºa tß╗½ng xe
 struct TruckRouteInfo {
     int truck_id;
-    vector<int> route;        // Thứ tự các node (bao gồm depot)
-    vector<double> arrival_times;  // Thời gian đến mỗi node
-    vector<double> departure_times; // Thời gian rời mỗi node
-    double completion_time;   // Thời gian hoàn thành (về depot)
+    vector<int> route;        // Thß╗⌐ tß╗▒ c├íc node (bao gß╗ôm depot)
+    vector<double> arrival_times;  // Thß╗¥i gian ─æß║┐n mß╗ùi node
+    vector<double> departure_times; // Thß╗¥i gian rß╗¥i mß╗ùi node
+    double completion_time;   // Thß╗¥i gian ho├án th├ánh (vß╗ü depot)
 };
 
-// Cấu trúc cho một lời giải đã được giải mã
+// Cß║Ñu tr├║c m├ú ho├í lß╗¥i giß║úi
 struct PDPSolution {
-    vector<vector<int>> routes; // (Giữ nguyên để tương thích)
-    double totalCost = 0.0;     // (Sẽ là C_max)
-    double totalPenalty = 0.0;  // (Phạt)
-    bool isFeasible = false;    // (Giữ nguyên)
+    vector<vector<int>> routes; // (Giß╗» nguy├¬n ─æß╗â t╞░╞íng th├¡ch)
+    double totalCost = 0.0;     // (Sß║╜ l├á C_max)
+    double totalPenalty = 0.0;  // (Phß║ít)
+    bool isFeasible = false;    // (Giß╗» nguy├¬n)
     
-    // Thông tin chi tiết (MỚI)
+    // Th├┤ng tin chi tiß║┐t (Mß╗ÜI)
     vector<TruckRouteInfo> truck_details;
     vector<ResupplyEvent> resupply_events;
-    vector<double> drone_completion_times; // Thời gian hoàn thành của mỗi drone
+    vector<double> drone_completion_times; // Thß╗¥i gian ho├án th├ánh cß╗ºa mß╗ùi drone
+    
+    // Sequence gß╗æc (─æß╗â local search c├│ thß╗â re-decode)
+    vector<int> original_sequence;
 };
 
 #endif
