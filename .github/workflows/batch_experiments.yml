@@ -1,0 +1,200 @@
+name: PDP Solver - Batch Experiments
+
+on:
+  workflow_dispatch:
+    inputs:
+      population_size:
+        description: 'Số cá thể GA'
+        required: true
+        default: '50'
+      max_generations:
+        description: 'Số thế hệ tối đa'
+        required: true
+        default: '100'
+      mutation_rate:
+        description: 'Tỷ lệ đột biến'
+        required: true
+        default: '0.1'
+      ls_iterations:
+        description: 'Số vòng lặp Local Search'
+        required: true
+        default: '100'
+      instance_pattern:
+        description: 'Pattern instances (e.g., U_50_1.0 for all U_50_1.0_Num_*)'
+        required: true
+        default: 'U_10_1.0'
+      runs_per_instance:
+        description: 'Số lần chạy mỗi instance'
+        required: true
+        default: '3'
+
+jobs:
+  batch-run:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Setup
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y g++ python3-pip bc
+        pip3 install pandas openpyxl
+    
+    - name: Compile
+      run: |
+        # Update LS iterations
+        sed -i "s/IntegratedLocalSearch ils(data, [0-9]*)/IntegratedLocalSearch ils(data, ${{ inputs.ls_iterations }})/g" main_ga_tabu.cpp
+        
+        g++ -O2 -std=c++17 -o pdp_solver \
+          main_ga_tabu.cpp pdp_reader.cpp pdp_utils.cpp \
+          pdp_ga.cpp pdp_tabu.cpp pdp_fitness.cpp \
+          pdp_localsearch.cpp pdp_init.cpp
+    
+    - name: Run batch experiments
+      run: |
+        mkdir -p results
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        RESULT_FILE="results/batch_${TIMESTAMP}.csv"
+        
+        # CSV header
+        echo "Run,Instance,Customers,Alpha,PopSize,MaxGen,MutRate,LSIter,CostBeforeLS,CostAfterLS,Improvement,ImprovementPct,Feasible,ResupplyEvents,Runtime_sec" > $RESULT_FILE
+        
+        # Find matching instance files
+        INSTANCES=$(ls ${{ inputs.instance_pattern }}_Num_*_pd.txt 2>/dev/null || echo "")
+        
+        if [ -z "$INSTANCES" ]; then
+          echo "❌ No instances found matching pattern: ${{ inputs.instance_pattern }}"
+          exit 1
+        fi
+        
+        echo "Found instances:"
+        echo "$INSTANCES"
+        echo ""
+        
+        TOTAL_RUNS=$(($(echo "$INSTANCES" | wc -l) * ${{ inputs.runs_per_instance }}))
+        CURRENT=0
+        
+        for INSTANCE in $INSTANCES; do
+          # Extract customers and alpha from filename
+          CUSTOMERS=$(echo $INSTANCE | grep -oP 'U_\K[0-9]+')
+          ALPHA=$(echo $INSTANCE | grep -oP 'U_[0-9]+_\K[0-9.]+')
+          
+          for run in $(seq 1 ${{ inputs.runs_per_instance }}); do
+            CURRENT=$((CURRENT + 1))
+            echo "[$CURRENT/$TOTAL_RUNS] Running $INSTANCE (run $run)"
+            
+            START=$(date +%s.%N)
+            OUTPUT=$(./pdp_solver "$INSTANCE" ${{ inputs.population_size }} ${{ inputs.max_generations }} ${{ inputs.mutation_rate }} $run 2>&1)
+            END=$(date +%s.%N)
+            RUNTIME=$(echo "$END - $START" | bc)
+            
+            # Parse output
+            COST_BEFORE=$(echo "$OUTPUT" | grep "Cost before Local Search:" | awk '{print $5}' | head -1)
+            COST_AFTER=$(echo "$OUTPUT" | grep "Cost after Local Search:" | awk '{print $5}' | head -1)
+            IMPROVEMENT=$(echo "$OUTPUT" | grep "Improvement by LS:" | awk '{print $4}' | head -1)
+            IMPROVEMENT_PCT=$(echo "$OUTPUT" | grep "Improvement by LS:" | grep -oP '\(\K[0-9.]+(?=%)' | head -1)
+            FEASIBLE=$(echo "$OUTPUT" | grep "Feasible:" | awk '{print $2}' | head -1)
+            RESUPPLY=$(echo "$OUTPUT" | grep "Resupply Events:" | awk '{print $3}' | head -1)
+            
+            [ -z "$IMPROVEMENT" ] && IMPROVEMENT="0"
+            [ -z "$IMPROVEMENT_PCT" ] && IMPROVEMENT_PCT="0"
+            [ -z "$COST_BEFORE" ] && COST_BEFORE="N/A"
+            [ -z "$COST_AFTER" ] && COST_AFTER="N/A"
+            
+            echo "$run,$INSTANCE,$CUSTOMERS,$ALPHA,${{ inputs.population_size }},${{ inputs.max_generations }},${{ inputs.mutation_rate }},${{ inputs.ls_iterations }},$COST_BEFORE,$COST_AFTER,$IMPROVEMENT,$IMPROVEMENT_PCT,$FEASIBLE,$RESUPPLY,$RUNTIME" >> $RESULT_FILE
+            
+            echo "  -> Cost: $COST_BEFORE -> $COST_AFTER (${RUNTIME}s)"
+          done
+        done
+        
+        echo ""
+        echo "=========================================="
+        echo "BATCH COMPLETE! Results:"
+        echo "=========================================="
+        cat $RESULT_FILE
+        
+        echo "RESULT_FILE=$RESULT_FILE" >> $GITHUB_ENV
+    
+    - name: Generate Excel report
+      run: |
+        cat > generate_report.py << 'PYEOF'
+import pandas as pd
+import os
+import glob
+
+csv_files = glob.glob('results/batch_*.csv')
+if not csv_files:
+    print("No CSV found")
+    exit(1)
+
+df = pd.read_csv(csv_files[0])
+
+# Generate Excel with multiple sheets
+excel_file = 'results/experiment_results.xlsx'
+with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+    # Sheet 1: Raw Data
+    df.to_excel(writer, sheet_name='Raw Data', index=False)
+    
+    # Sheet 2: Summary by Instance
+    summary = df.groupby(['Instance', 'Customers', 'Alpha']).agg({
+        'CostBeforeLS': 'mean',
+        'CostAfterLS': ['mean', 'min', 'max', 'std'],
+        'ImprovementPct': 'mean',
+        'Runtime_sec': 'mean',
+        'Feasible': lambda x: (x == 'YES').sum() / len(x) * 100
+    }).round(2)
+    summary.columns = ['AvgCostBefore', 'AvgCostAfter', 'MinCost', 'MaxCost', 'StdCost', 'AvgImprovement%', 'AvgRuntime', 'Feasible%']
+    summary.to_excel(writer, sheet_name='Summary by Instance')
+    
+    # Sheet 3: Summary by Customer Size
+    by_size = df.groupby('Customers').agg({
+        'CostAfterLS': ['mean', 'min', 'max'],
+        'ImprovementPct': 'mean',
+        'Runtime_sec': 'mean'
+    }).round(2)
+    by_size.columns = ['AvgCost', 'MinCost', 'MaxCost', 'AvgImprovement%', 'AvgRuntime']
+    by_size.to_excel(writer, sheet_name='Summary by Size')
+    
+    # Sheet 4: Configuration
+    config_df = pd.DataFrame({
+        'Parameter': ['Population Size', 'Max Generations', 'Mutation Rate', 'LS Iterations', 'Runs per Instance'],
+        'Value': [df['PopSize'].iloc[0], df['MaxGen'].iloc[0], df['MutRate'].iloc[0], df['LSIter'].iloc[0], len(df) // df['Instance'].nunique()]
+    })
+    config_df.to_excel(writer, sheet_name='Configuration', index=False)
+
+print(f"✅ Excel report: {excel_file}")
+PYEOF
+        
+        python3 generate_report.py
+    
+    - name: Generate summary
+      run: |
+        echo "# 📊 Batch Experiment Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## ⚙️ Configuration" >> $GITHUB_STEP_SUMMARY
+        echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Instance Pattern | \`${{ inputs.instance_pattern }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| Population Size | ${{ inputs.population_size }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Max Generations | ${{ inputs.max_generations }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Mutation Rate | ${{ inputs.mutation_rate }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| LS Iterations | ${{ inputs.ls_iterations }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Runs per Instance | ${{ inputs.runs_per_instance }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 📈 Results (CSV)" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`csv" >> $GITHUB_STEP_SUMMARY
+        cat $RESULT_FILE >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "📥 Download Excel report from Artifacts below!" >> $GITHUB_STEP_SUMMARY
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: batch-results-${{ github.run_number }}
+        path: |
+          results/*.csv
+          results/*.xlsx
+        retention-days: 90
