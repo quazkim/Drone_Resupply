@@ -45,27 +45,11 @@ jobs:
     - name: Setup build environment
       run: |
         sudo apt-get update
-        sudo apt-get install -y g++ make
+        sudo apt-get install -y g++ make bc
     
-    - name: Compile solver
+    - name: Update Local Search iterations and Compile
       run: |
-        g++ -O2 -std=c++17 -o pdp_solver \
-          main_ga_tabu.cpp \
-          pdp_reader.cpp \
-          pdp_utils.cpp \
-          pdp_ga.cpp \
-          pdp_tabu.cpp \
-          pdp_fitness.cpp \
-          pdp_localsearch.cpp \
-          pdp_init.cpp
-        echo "✅ Compilation successful!"
-    
-    - name: Update Local Search iterations
-      run: |
-        # Update LS iterations in main_ga_tabu.cpp
         sed -i "s/IntegratedLocalSearch ils(data, [0-9]*)/IntegratedLocalSearch ils(data, ${{ inputs.ls_iterations }})/g" main_ga_tabu.cpp
-        
-        # Recompile with updated LS iterations
         g++ -O2 -std=c++17 -o pdp_solver \
           main_ga_tabu.cpp \
           pdp_reader.cpp \
@@ -75,7 +59,7 @@ jobs:
           pdp_fitness.cpp \
           pdp_localsearch.cpp \
           pdp_init.cpp
-        echo "✅ Recompiled with LS iterations = ${{ inputs.ls_iterations }}"
+        echo "✅ Compiled with LS iterations = ${{ inputs.ls_iterations }}"
     
     - name: Run experiments
       run: |
@@ -90,23 +74,18 @@ jobs:
         echo "Run Count: ${{ inputs.run_count }}"
         echo "=========================================="
         
-        # Create results directory
         mkdir -p results
-        
-        # Initialize CSV file
         TIMESTAMP=$(date +%Y%m%d_%H%M%S)
         RESULT_FILE="results/experiment_${TIMESTAMP}.csv"
         
         echo "Run,Instance,PopSize,MaxGen,MutRate,LSIter,CostBeforeLS,CostAfterLS,Improvement,ImprovementPct,Feasible,ResupplyEvents,Runtime_sec" > $RESULT_FILE
         
-        # Run experiments
         for run in $(seq 1 ${{ inputs.run_count }}); do
           echo ""
           echo ">>> Run $run / ${{ inputs.run_count }}"
           
           START_TIME=$(date +%s.%N)
           
-          # Run solver and capture output
           OUTPUT=$(./pdp_solver \
             "${{ inputs.instance_file }}" \
             ${{ inputs.population_size }} \
@@ -117,21 +96,18 @@ jobs:
           END_TIME=$(date +%s.%N)
           RUNTIME=$(echo "$END_TIME - $START_TIME" | bc)
           
-          # Parse results from output
           COST_BEFORE=$(echo "$OUTPUT" | grep "Cost before Local Search:" | awk '{print $5}')
           COST_AFTER=$(echo "$OUTPUT" | grep "Cost after Local Search:" | awk '{print $5}')
           IMPROVEMENT=$(echo "$OUTPUT" | grep "Improvement by LS:" | awk '{print $4}')
-          IMPROVEMENT_PCT=$(echo "$OUTPUT" | grep "Improvement by LS:" | grep -oP '\(\K[0-9.]+(?=%)')
+          IMPROVEMENT_PCT=$(echo "$OUTPUT" | grep "Improvement by LS:" | grep -oP '\(\K[0-9.]+(?=%)' || echo "0")
           FEASIBLE=$(echo "$OUTPUT" | grep "Feasible:" | awk '{print $2}')
           RESUPPLY=$(echo "$OUTPUT" | grep "Resupply Events:" | awk '{print $3}')
           
-          # Handle case where no improvement
           if [ -z "$IMPROVEMENT" ]; then
             IMPROVEMENT="0"
             IMPROVEMENT_PCT="0"
           fi
           
-          # Write to CSV
           echo "$run,${{ inputs.instance_file }},${{ inputs.population_size }},${{ inputs.max_generations }},${{ inputs.mutation_rate }},${{ inputs.ls_iterations }},$COST_BEFORE,$COST_AFTER,$IMPROVEMENT,$IMPROVEMENT_PCT,$FEASIBLE,$RESUPPLY,$RUNTIME" >> $RESULT_FILE
           
           echo "  Cost: $COST_BEFORE -> $COST_AFTER (Improvement: $IMPROVEMENT_PCT%)"
@@ -144,7 +120,6 @@ jobs:
         echo "=========================================="
         cat $RESULT_FILE
         
-        # Save result file path for artifact
         echo "RESULT_FILE=$RESULT_FILE" >> $GITHUB_ENV
     
     - name: Generate summary report
@@ -166,12 +141,10 @@ jobs:
         cat $RESULT_FILE >> $GITHUB_STEP_SUMMARY
         echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
         
-        # Calculate statistics if multiple runs
         if [ "${{ inputs.run_count }}" -gt 1 ]; then
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Statistics" >> $GITHUB_STEP_SUMMARY
           
-          # Calculate average cost
           AVG_COST=$(tail -n +2 $RESULT_FILE | awk -F',' '{sum+=$8; count++} END {printf "%.2f", sum/count}')
           MIN_COST=$(tail -n +2 $RESULT_FILE | awk -F',' 'NR==1{min=$8} $8<min{min=$8} END {print min}')
           MAX_COST=$(tail -n +2 $RESULT_FILE | awk -F',' 'NR==1{max=$8} $8>max{max=$8} END {print max}')
@@ -192,8 +165,7 @@ jobs:
         path: results/
         retention-days: 30
 
-  # Job to run multiple instances (batch experiment)
-  batch-experiment:
+  generate-excel:
     if: ${{ inputs.run_count > 1 }}
     needs: run-solver
     runs-on: ubuntu-latest
@@ -204,51 +176,46 @@ jobs:
         name: experiment-results-${{ github.run_number }}
         path: results/
     
-    - name: Generate Excel report
-      run: |
-        # Install Python and pandas
-        sudo apt-get install -y python3-pip
-        pip3 install pandas openpyxl
-        
-        # Create Python script to generate Excel
-        cat > generate_excel.py << 'EOF'
-import pandas as pd
-import glob
-import os
-
-# Find CSV files
-csv_files = glob.glob('results/*.csv')
-if not csv_files:
-    print("No CSV files found")
-    exit(1)
-
-# Read and combine all CSVs
-dfs = []
-for f in csv_files:
-    df = pd.read_csv(f)
-    dfs.append(df)
-
-combined = pd.concat(dfs, ignore_index=True)
-
-# Generate Excel file
-excel_file = 'results/experiment_results.xlsx'
-with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
-    # Raw data sheet
-    combined.to_excel(writer, sheet_name='Raw Data', index=False)
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
     
-    # Summary statistics
-    summary = combined.groupby('Instance').agg({
-        'CostAfterLS': ['mean', 'min', 'max', 'std'],
-        'ImprovementPct': ['mean', 'max'],
-        'Runtime_sec': ['mean', 'sum']
-    }).round(2)
-    summary.columns = ['_'.join(col) for col in summary.columns]
-    summary.to_excel(writer, sheet_name='Summary')
-
-print(f"Excel report generated: {excel_file}")
-EOF
+    - name: Install dependencies
+      run: pip install pandas openpyxl
+    
+    - name: Generate Excel report
+      shell: python
+      run: |
+        import pandas as pd
+        import glob
         
-        python3 generate_excel.py
+        csv_files = glob.glob('results/*.csv')
+        if not csv_files:
+            print("No CSV files found")
+            exit(1)
+        
+        dfs = []
+        for f in csv_files:
+            df = pd.read_csv(f)
+            dfs.append(df)
+        
+        combined = pd.concat(dfs, ignore_index=True)
+        
+        excel_file = 'results/experiment_results.xlsx'
+        with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+            combined.to_excel(writer, sheet_name='Raw Data', index=False)
+            
+            if len(combined) > 1:
+                summary = combined.groupby('Instance').agg({
+                    'CostAfterLS': ['mean', 'min', 'max', 'std'],
+                    'ImprovementPct': ['mean', 'max'],
+                    'Runtime_sec': ['mean', 'sum']
+                }).round(2)
+                summary.columns = ['_'.join(col) for col in summary.columns]
+                summary.to_excel(writer, sheet_name='Summary')
+        
+        print(f"Excel report generated: {excel_file}")
     
     - name: Upload Excel report
       uses: actions/upload-artifact@v4
