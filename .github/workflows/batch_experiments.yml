@@ -39,8 +39,7 @@ jobs:
     - name: Setup
       run: |
         sudo apt-get update
-        sudo apt-get install -y g++ python3-pip bc
-        pip3 install pandas openpyxl
+        sudo apt-get install -y g++ bc
     
     - name: Compile
       run: |
@@ -114,60 +113,58 @@ jobs:
         echo "BATCH COMPLETE! Results:"
         echo "=========================================="
         cat $RESULT_FILE
-        
+
         echo "RESULT_FILE=$RESULT_FILE" >> $GITHUB_ENV
-    
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Python dependencies
+      run: pip install pandas openpyxl
+
     - name: Generate Excel report
+      shell: python
       run: |
-        cat > generate_report.py << 'PYEOF'
-import pandas as pd
-import os
-import glob
+        import pandas as pd
+        import glob
 
-csv_files = glob.glob('results/batch_*.csv')
-if not csv_files:
-    print("No CSV found")
-    exit(1)
+        csv_files = glob.glob('results/batch_*.csv')
+        if not csv_files:
+            print("No CSV found")
+            exit(1)
 
-df = pd.read_csv(csv_files[0])
+        df = pd.read_csv(csv_files[0])
 
-# Generate Excel with multiple sheets
-excel_file = 'results/experiment_results.xlsx'
-with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
-    # Sheet 1: Raw Data
-    df.to_excel(writer, sheet_name='Raw Data', index=False)
-    
-    # Sheet 2: Summary by Instance
-    summary = df.groupby(['Instance', 'Customers', 'Alpha']).agg({
-        'CostBeforeLS': 'mean',
-        'CostAfterLS': ['mean', 'min', 'max', 'std'],
-        'ImprovementPct': 'mean',
-        'Runtime_sec': 'mean',
-        'Feasible': lambda x: (x == 'YES').sum() / len(x) * 100
-    }).round(2)
-    summary.columns = ['AvgCostBefore', 'AvgCostAfter', 'MinCost', 'MaxCost', 'StdCost', 'AvgImprovement%', 'AvgRuntime', 'Feasible%']
-    summary.to_excel(writer, sheet_name='Summary by Instance')
-    
-    # Sheet 3: Summary by Customer Size
-    by_size = df.groupby('Customers').agg({
-        'CostAfterLS': ['mean', 'min', 'max'],
-        'ImprovementPct': 'mean',
-        'Runtime_sec': 'mean'
-    }).round(2)
-    by_size.columns = ['AvgCost', 'MinCost', 'MaxCost', 'AvgImprovement%', 'AvgRuntime']
-    by_size.to_excel(writer, sheet_name='Summary by Size')
-    
-    # Sheet 4: Configuration
-    config_df = pd.DataFrame({
-        'Parameter': ['Population Size', 'Max Generations', 'Mutation Rate', 'LS Iterations', 'Runs per Instance'],
-        'Value': [df['PopSize'].iloc[0], df['MaxGen'].iloc[0], df['MutRate'].iloc[0], df['LSIter'].iloc[0], len(df) // df['Instance'].nunique()]
-    })
-    config_df.to_excel(writer, sheet_name='Configuration', index=False)
+        excel_file = 'results/experiment_results.xlsx'
+        with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Raw Data', index=False)
 
-print(f"✅ Excel report: {excel_file}")
-PYEOF
-        
-        python3 generate_report.py
+            summary = df.groupby(['Instance', 'Customers', 'Alpha']).agg({
+                'CostBeforeLS': 'mean',
+                'CostAfterLS': ['mean', 'min', 'max', 'std'],
+                'ImprovementPct': 'mean',
+                'Runtime_sec': 'mean'
+            }).round(2)
+            summary.columns = ['AvgCostBefore', 'AvgCostAfter', 'MinCost', 'MaxCost', 'StdCost', 'AvgImprovement%', 'AvgRuntime']
+            summary.to_excel(writer, sheet_name='Summary by Instance')
+
+            by_size = df.groupby('Customers').agg({
+                'CostAfterLS': ['mean', 'min', 'max'],
+                'ImprovementPct': 'mean',
+                'Runtime_sec': 'mean'
+            }).round(2)
+            by_size.columns = ['AvgCost', 'MinCost', 'MaxCost', 'AvgImprovement%', 'AvgRuntime']
+            by_size.to_excel(writer, sheet_name='Summary by Size')
+
+            config_df = pd.DataFrame({
+                'Parameter': ['Population Size', 'Max Generations', 'Mutation Rate', 'LS Iterations', 'Runs per Instance'],
+                'Value': [df['PopSize'].iloc[0], df['MaxGen'].iloc[0], df['MutRate'].iloc[0], df['LSIter'].iloc[0], len(df) // df['Instance'].nunique()]
+            })
+            config_df.to_excel(writer, sheet_name='Configuration', index=False)
+
+        print(f"Excel report: {excel_file}")
     
     - name: Generate summary
       run: |
