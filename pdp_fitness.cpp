@@ -10,6 +10,10 @@
 
 using namespace std;
 
+// ============ CONFIGURATION ============
+static const bool ENABLE_MERGE_STRATEGIES = true;   // Set to false to disable merge
+static const bool ENABLE_CONSOLIDATION = true;      // Allow multiple packages per trip
+
 // ============ FORWARD DECLARATIONS ============
 
 // Trang thai cua moi xe tai (dung chung cho nhieu functions)
@@ -41,6 +45,15 @@ static double getDroneDistance(const PDPData& data, int nodeA_id, int nodeB_id) 
 }
 
 // ============ DRONE CONSOLIDATION HELPER ============
+
+// Forward declaration
+static pair<double, bool> evaluateDroneTrip(
+    const vector<int>& customers,
+    int drone_id,
+    const struct TruckState& truck,
+    const PDPData& data,
+    const vector<double>& Drone_Available_Time
+);
 
 /**
  * @brief Tim cac customers type D co the consolidate trong 1 drone trip
@@ -97,8 +110,15 @@ static vector<int> findConsolidationCandidates(
 }
 
 /**
- * @brief Tinh toan chi phi va kiem tra feasibility cua drone trip voi multiple customers
- * @param customers Danh sach customer IDs trong trip
+ * @brief Tinh toan chi phi va kiem tra feasibility cua drone trip
+ * LOGIC CHINH XAC:
+ *   1. Drone xuat phat tu DEPOT (mang nhieu goi hang - packages cho customers)
+ *   2. Drone bay THANG den 1 DIEM GAP TRUCK (resupply point - la 1 customer nao do)
+ *   3. Tai diem do, drone GIAO TAT CA packages cho truck
+ *   4. Drone ve depot
+ *   5. Truck se di giao hang cho cac customers
+ * 
+ * @param customers Danh sach customer IDs ma packages cua ho duoc chuyen cho truck (KHONG phai drone visit)
  * @param drone_id ID cua drone
  * @param truck Trang thai hien tai cua truck
  * @param data Du lieu bai toan
@@ -114,55 +134,283 @@ static pair<double, bool> evaluateDroneTrip(
 ) {
     if (customers.empty()) return {numeric_limits<double>::max(), false};
     
-    // Tinh ready time muon nhat trong cac customers
+    // CRITICAL: TAT CA packages phai READY TAI DEPOT truoc khi drone xuat phat
+    // Ready time cua moi customer la thoi diem package cua ho SAN SANG TAI DEPOT
+    // Drone phai DOI package cuoi cung ready, roi moi load va xuat phat
     double max_ready_time = 0.0;
     for (int cust : customers) {
         max_ready_time = max(max_ready_time, (double)data.readyTimes[cust]);
     }
     
+    // Drone chi xuat phat khi:
+    // 1. Drone da ranh (available)
+    // 2. TAT CA packages da ready tai depot (max_ready_time)
     double T_Drone_Ready = max(Drone_Available_Time[drone_id], max_ready_time);
-    double current_time = T_Drone_Ready + data.depotDroneLoadTime;
-    double total_flight_time = 0.0;
-    int current_pos = data.depotIndex;
     
-    // Tinh thoi gian bay va thoi gian hoan thanh
-    double max_completion_time = 0.0;
+    // Load packages tai depot
+    double drone_depart_time = T_Drone_Ready + data.depotDroneLoadTime;
     
-    for (int cust : customers) {
-        // Drone bay den customer
-        double t_fly = getDroneDistance(data, current_pos, cust) / data.droneSpeed * 60.0;
-        current_time += t_fly;
-        total_flight_time += t_fly;
-        
-        // Truck den customer
-        double truck_travel_time = getTruckDistance(data, truck.current_position, cust) / data.truckSpeed * 60.0;
-        double T_Truck_Arr = truck.available_time + truck_travel_time;
-        
-        // Thoi gian bat dau resupply = max(drone arrive, truck arrive)
-        // KHONG doi ready_time tai customer (da xu ly khi drone lay hang tu depot)
-        double T_Start_Resupply = max(current_time, T_Truck_Arr);
-        
-        // Thoi gian cho cua drone
-        double wait_time = T_Start_Resupply - current_time;
-        total_flight_time += wait_time;
-        
-        // Resupply v├á truck service
-        current_time = T_Start_Resupply + data.resupplyTime + data.truckServiceTime;
-        total_flight_time += data.resupplyTime;
-        
-        max_completion_time = max(max_completion_time, current_time);
-        current_pos = cust;
-    }
+    // Chon diem resupply = customer DAU TIEN trong list
+    // (truck se di den day de nhan packages, roi di giao cho tat ca customers)
+    int resupply_point = customers[0];
     
-    // Drone quay ve depot
-    double t_return = getDroneDistance(data, current_pos, data.depotIndex) / data.droneSpeed * 60.0;
-    total_flight_time += t_return;
-    double drone_return_time = current_time + t_return;
+    // VALIDATION: Kiem tra resupply point co hop le khong
+    // Ready time tai resupply point phai <= thoi diem drone den
+    // (vi packages da ready tai depot roi, nen ready time tai resupply point khong anh huong)
+    // NHUNG ta van can dam bao truck co the den duoc
+    
+    // PHASE 1: Drone bay THANG tu depot den resupply point
+    double t_fly_to_resupply = getDroneDistance(data, data.depotIndex, resupply_point) / data.droneSpeed * 60.0;
+    double drone_arrive_time = drone_depart_time + t_fly_to_resupply;
+    
+    // PHASE 2: Truck di den resupply point
+    double truck_travel_time = getTruckDistance(data, truck.current_position, resupply_point) / data.truckSpeed * 60.0;
+    double truck_arrive_time = truck.available_time + truck_travel_time;
+    
+    // Thoi gian bat dau resupply = max(drone arrive, truck arrive)
+    // KHONG can kiem tra ready time tai resupply point
+    // Vi ready time chi la thoi diem package XUAT HIEN TAI DEPOT
+    // Sau khi package ready, co the giao cho khach BAT CU LUC NAO
+    double T_Start_Resupply = max(drone_arrive_time, truck_arrive_time);
+    
+    // Thoi gian cho cua drone (neu truck chua den)
+    double wait_time = T_Start_Resupply - drone_arrive_time;
+    
+    // VALIDATION: Neu drone phai doi qua lau -> khong hieu qua
+    // (co the bo qua neu muon linh hoat hon)
+    // if (wait_time > 30.0) return {numeric_limits<double>::max(), false};
+    
+    // Resupply: Drone giao TAT CA packages cho truck
+    double resupply_end = T_Start_Resupply + data.resupplyTime;
+    
+    // PHASE 3: Drone quay ve depot
+    double t_return = getDroneDistance(data, resupply_point, data.depotIndex) / data.droneSpeed * 60.0;
+    double drone_return_time = resupply_end + t_return;
+    
+    // Tinh tong thoi gian bay
+    double total_flight_time = t_fly_to_resupply + wait_time + t_return;
     
     // Kiem tra endurance
     bool feasible = (total_flight_time <= data.droneEndurance);
     
-    return {drone_return_time, feasible};
+    // PHASE 4: Truck di giao hang cho TAT CA customers
+    // Sau khi nhan hang tu drone, truck phai di giao cho tung customer
+    double truck_time = resupply_end;
+    int truck_pos = resupply_point;
+    
+    for (int cust : customers) {
+        // Truck di den customer
+        double travel_time = getTruckDistance(data, truck_pos, cust) / data.truckSpeed * 60.0;
+        double arrival_time = truck_time + travel_time;
+        
+        // Giao hang (service time)
+        truck_time = arrival_time + data.truckServiceTime;
+        truck_pos = cust;
+    }
+    
+    // Completion time = max(drone return, truck finish delivery)
+    double completion_time = max(drone_return_time, truck_time);
+    
+    return {completion_time, feasible};
+}
+
+/**
+ * @brief Merge 2 drone trips va kiem tra xem co tot hon khong
+ * @return pair<merged_event, improvement> - improvement > 0 neu tot hon
+ */
+static pair<ResupplyEvent, double> tryMergeTrips(
+    const ResupplyEvent& trip1,
+    const ResupplyEvent& trip2,
+    const PDPData& data,
+    const vector<TruckState>& trucks,
+    const vector<double>& Drone_Available_Time
+) {
+    ResupplyEvent merged;
+    merged.customer_ids = trip1.customer_ids;
+    merged.customer_ids.insert(merged.customer_ids.end(),
+                               trip2.customer_ids.begin(),
+                               trip2.customer_ids.end());
+    merged.drone_id = trip1.drone_id;
+    merged.truck_id = trip1.truck_id;
+    
+    // Sort by ready time
+    sort(merged.customer_ids.begin(), merged.customer_ids.end(),
+         [&data](int a, int b) { return data.readyTimes[a] < data.readyTimes[b]; });
+    
+    // Check capacity
+    if ((int)merged.customer_ids.size() > data.getDroneCapacity()) {
+        return {merged, -1e9}; // Not feasible
+    }
+    
+    // Check consolidation constraints
+    if (merged.customer_ids.size() > 1) {
+        int first_ready = data.readyTimes[merged.customer_ids[0]];
+        int max_ready = first_ready;
+        int min_ready = first_ready;
+        
+        for (size_t i = 1; i < merged.customer_ids.size(); ++i) {
+            int cust = merged.customer_ids[i];
+            int ready = data.readyTimes[cust];
+            
+            max_ready = max(max_ready, ready);
+            min_ready = min(min_ready, ready);
+            
+            // Ready time constraint (30 min - relaxed for feasibility)
+            if (abs(ready - first_ready) > 30) {
+                return {merged, -1e9};
+            }
+            
+            // Distance constraint (10km from first)
+            double dist = getDroneDistance(data, merged.customer_ids[0], cust);
+            if (dist > 10.0) {
+                return {merged, -1e9};
+            }
+        }
+        
+        // SMART CHECK: Nếu ready time chênh lệch > 15 phút
+        // → Merge có thể GÂY WAITING TIME cao
+        // Chỉ merge nếu có lợi ích rõ ràng về khoảng cách
+        int ready_gap = max_ready - min_ready;
+        if (ready_gap > 15) {
+            // Tính avg distance giữa customers
+            double total_dist = 0;
+            int pair_count = 0;
+            for (size_t i = 0; i < merged.customer_ids.size(); ++i) {
+                for (size_t j = i + 1; j < merged.customer_ids.size(); ++j) {
+                    total_dist += getDroneDistance(data, 
+                                                   merged.customer_ids[i], 
+                                                   merged.customer_ids[j]);
+                    pair_count++;
+                }
+            }
+            double avg_dist = total_dist / pair_count;
+            
+            // Nếu ready gap lớn VÀ customers xa nhau → KHÔNG merge
+            if (avg_dist > 3.0) {  // 3km threshold
+                return {merged, -1e9};
+            }
+        }
+    }
+    
+    // Evaluate merged trip
+    auto result = evaluateDroneTrip(
+        merged.customer_ids,
+        merged.drone_id,
+        trucks[merged.truck_id],
+        data,
+        Drone_Available_Time
+    );
+    
+    if (!result.second) { // Not feasible
+        return {merged, -1e9};
+    }
+    
+    double merged_completion = result.first;
+    
+    // Calculate improvement: compare with doing 2 separate trips
+    // CRITICAL: Phải xét xem 2 trips có cùng drone hay không
+    
+    double trip1_completion = evaluateDroneTrip(
+        trip1.customer_ids, trip1.drone_id, 
+        trucks[trip1.truck_id], data, Drone_Available_Time).first;
+    double trip2_completion = evaluateDroneTrip(
+        trip2.customer_ids, trip2.drone_id,
+        trucks[trip2.truck_id], data, Drone_Available_Time).first;
+    
+    double original_completion;
+    
+    if (trip1.drone_id == trip2.drone_id) {
+        // CÙNG DRONE: Phải chạy tuần tự (sequential)
+        // Trip 2 chỉ bắt đầu sau khi trip 1 hoàn thành
+        
+        // Giả sử trip1 chạy trước (có ready time sớm hơn)
+        int trip1_max_ready = 0;
+        for (int c : trip1.customer_ids) 
+            trip1_max_ready = max(trip1_max_ready, data.readyTimes[c]);
+        
+        int trip2_max_ready = 0;
+        for (int c : trip2.customer_ids)
+            trip2_max_ready = max(trip2_max_ready, data.readyTimes[c]);
+        
+        if (trip1_max_ready <= trip2_max_ready) {
+            // Trip 1 trước, Trip 2 sau
+            // Trip 2 phải đợi trip 1 về depot + ready time của trip 2
+            double trip2_start = max(trip1_completion, (double)trip2_max_ready);
+            double trip2_adjusted = trip2_start - trip2_max_ready + trip2_completion;
+            original_completion = trip2_adjusted;
+        } else {
+            // Trip 2 trước, Trip 1 sau
+            double trip1_start = max(trip2_completion, (double)trip1_max_ready);
+            double trip1_adjusted = trip1_start - trip1_max_ready + trip1_completion;
+            original_completion = trip1_adjusted;
+        }
+    } else {
+        // KHÁC DRONE: Chạy song song (parallel)
+        original_completion = max(trip1_completion, trip2_completion);
+    }
+    
+    // Calculate waiting time penalty for merged trip
+    double merged_waiting_penalty = 0;
+    if (merged.customer_ids.size() > 1) {
+        int max_ready = 0;
+        for (int cust : merged.customer_ids) {
+            max_ready = max(max_ready, data.readyTimes[cust]);
+        }
+        
+        // Các customers có ready time sớm hơn phải đợi
+        for (int cust : merged.customer_ids) {
+            int wait_time = max_ready - data.readyTimes[cust];
+            merged_waiting_penalty += wait_time * 0.5; // 0.5 weight cho waiting
+        }
+    }
+    
+    // Adjusted improvement (trừ đi waiting penalty)
+    double improvement = original_completion - merged_completion - merged_waiting_penalty;
+    
+    // CHỈ merge nếu improvement > threshold (ít nhất 1 phút)
+    if (improvement < 1.0) {
+        return {merged, -1.0}; // Not worth merging
+    }
+    
+    // Update merged event with full details
+    double max_ready = 0.0;
+    for (int cust : merged.customer_ids) {
+        max_ready = max(max_ready, (double)data.readyTimes[cust]);
+    }
+    
+    double T_Drone_Ready = max(Drone_Available_Time[merged.drone_id], max_ready);
+    merged.drone_depart_time = T_Drone_Ready + data.depotDroneLoadTime;
+    
+    const auto& truck = trucks[merged.truck_id];
+    
+    // LOGIC DUNG: Chi co 1 resupply point (customer dau tien)
+    int resupply_point = merged.customer_ids[0];
+    
+    // Drone bay tu depot -> resupply point
+    double t_fly_to_resupply = getDroneDistance(data, data.depotIndex, resupply_point) / data.droneSpeed * 60.0;
+    double drone_arrive = merged.drone_depart_time + t_fly_to_resupply;
+    
+    // Truck den resupply point
+    double truck_travel = getTruckDistance(data, truck.current_position, resupply_point) / data.truckSpeed * 60.0;
+    double truck_arrive = truck.available_time + truck_travel;
+    
+    // Resupply
+    double resupply_start = max(drone_arrive, truck_arrive);
+    double wait = resupply_start - drone_arrive;
+    double resupply_end = resupply_start + data.resupplyTime;
+    
+    // Drone ve depot
+    double t_return = getDroneDistance(data, resupply_point, data.depotIndex) / data.droneSpeed * 60.0;
+    merged.drone_return_time = resupply_end + t_return;
+    merged.total_flight_time = t_fly_to_resupply + wait + t_return;
+    
+    // Chi luu 1 resupply event
+    merged.arrive_times.push_back(drone_arrive);
+    merged.truck_arrive_times.push_back(truck_arrive);
+    merged.resupply_starts.push_back(resupply_start);
+    merged.resupply_ends.push_back(resupply_end);
+    
+    return {merged, improvement};
 }
 
 // =========================================================
@@ -244,7 +492,8 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
             
             // Thuc hien delivery cho xe nay (khong can chon xe ranh nhat)
             double T_Arr = truck.available_time + getTruckDistance(data, truck.current_position, v_id) / data.truckSpeed * 60.0;
-            double T_Start = max(T_Arr, e_v);
+            // DL: Truck da co hang roi, KHONG can doi ready time
+            double T_Start = T_Arr;
             truck.available_time = T_Start + data.truckServiceTime;
             truck.current_position = v_id;
             truck.route.push_back(v_id);
@@ -355,6 +604,11 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
                 seq, seq_idx, data, truck.current_position, drone_capacity
             );
             
+            // DISABLE CONSOLIDATION: Chi lay 1 customer per trip
+            if (!ENABLE_CONSOLIDATION && !consolidation_candidates.empty()) {
+                consolidation_candidates.resize(1);  // Chi giu lai customer dau tien
+            }
+            
             // DEBUG: In ra sß╗æ ß╗⌐ng vi├¬n consolidation (chß╗ë khi > 1)
             // if (consolidation_candidates.size() > 1) {
             //     cout << "[CONSOLIDATION] Node " << v_id 
@@ -426,37 +680,32 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
                     double T_Drone_Ready = max(Drone_Available_Time[d_id], max_ready);
                     event.drone_depart_time = T_Drone_Ready + data.depotDroneLoadTime;
                     
-                    int current_pos = data.depotIndex;
-                    double drone_time = event.drone_depart_time;
-                    double total_flight = 0.0;
+                    // LOGIC DUNG: Chi co 1 resupply point (customer dau tien)
+                    int resupply_point = current_batch[0];
                     
-                    for (int cust : current_batch) {
-                        double t_fly = getDroneDistance(data, current_pos, cust) / data.droneSpeed * 60.0;
-                        drone_time += t_fly;
-                        total_flight += t_fly;
-                        
-                        double truck_travel = getTruckDistance(data, truck.current_position, cust) / data.truckSpeed * 60.0;
-                        double T_Truck_Arr = truck.available_time + truck_travel;
-                        // KHONG doi ready_time tai customer (da xu ly khi drone lay hang tu depot)
-                        double T_Start = max(drone_time, T_Truck_Arr);
-                        
-                        double wait = T_Start - drone_time;
-                        total_flight += wait;
-                        
-                        event.arrive_times.push_back(drone_time);
-                        event.truck_arrive_times.push_back(T_Truck_Arr);
-                        event.resupply_starts.push_back(T_Start);
-                        event.resupply_ends.push_back(T_Start + data.resupplyTime + data.truckServiceTime);
-                        
-                        drone_time = T_Start + data.resupplyTime + data.truckServiceTime;
-                        total_flight += data.resupplyTime;
-                        current_pos = cust;
-                    }
+                    // Drone bay tu depot -> resupply point
+                    double t_fly_to_resupply = getDroneDistance(data, data.depotIndex, resupply_point) / data.droneSpeed * 60.0;
+                    double drone_arrive = event.drone_depart_time + t_fly_to_resupply;
                     
-                    double t_return = getDroneDistance(data, current_pos, data.depotIndex) / data.droneSpeed * 60.0;
-                    total_flight += t_return;
-                    event.drone_return_time = drone_time + t_return;
-                    event.total_flight_time = total_flight;
+                    // Truck den resupply point
+                    double truck_travel = getTruckDistance(data, truck.current_position, resupply_point) / data.truckSpeed * 60.0;
+                    double truck_arrive = truck.available_time + truck_travel;
+                    
+                    // Resupply
+                    double resupply_start = max(drone_arrive, truck_arrive);
+                    double wait = resupply_start - drone_arrive;
+                    double resupply_end = resupply_start + data.resupplyTime;
+                    
+                    // Drone ve depot
+                    double t_return = getDroneDistance(data, resupply_point, data.depotIndex) / data.droneSpeed * 60.0;
+                    event.drone_return_time = resupply_end + t_return;
+                    event.total_flight_time = t_fly_to_resupply + wait + t_return;
+                    
+                    // Chi luu 1 resupply event
+                    event.arrive_times.push_back(drone_arrive);
+                    event.truck_arrive_times.push_back(truck_arrive);
+                    event.resupply_starts.push_back(resupply_start);
+                    event.resupply_ends.push_back(resupply_end);
                     
                     all_batches.push_back({num_custs, d_id, completion_time, effective_cost, true, event});
                 }
@@ -705,8 +954,146 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
         
         C_max = max(C_max, truck.available_time);
     }
-
-    // Tß║Ñt cß║ú xe vß╗ü depot
+    // ========== SMART MERGE STRATEGIES ==========
+    // Apply merge strategies to reduce drone trips if beneficial
+    
+    if (sol.resupply_events.size() >= 2) {
+        bool improved = true;
+        int merge_iterations = 0;
+        const int MAX_MERGE_ITERATIONS = 3; // Prevent infinite loop
+        
+        while (improved && merge_iterations < MAX_MERGE_ITERATIONS) {
+            improved = false;
+            merge_iterations++;
+            
+            // STRATEGY 1: Sequential Merge (highest priority)
+            // Merge trips that are consecutive in truck route
+            for (int t = 0; t < data.numTrucks; ++t) {
+                vector<pair<int, size_t>> truck_events; // <position_in_route, event_index>
+                
+                for (size_t i = 0; i < sol.resupply_events.size(); ++i) {
+                    if (sol.resupply_events[i].truck_id != t) continue;
+                    
+                    // Find position of first customer in truck route
+                    for (size_t pos = 0; pos < trucks[t].route.size(); ++pos) {
+                        if (trucks[t].route[pos] == sol.resupply_events[i].customer_ids[0]) {
+                            truck_events.push_back({pos, i});
+                            break;
+                        }
+                    }
+                }
+                
+                sort(truck_events.begin(), truck_events.end());
+                
+                // Try merge consecutive trips (within 2 hops)
+                for (size_t i = 0; i + 1 < truck_events.size(); ++i) {
+                    int pos1 = truck_events[i].first;
+                    int pos2 = truck_events[i+1].first;
+                    
+                    if (pos2 - pos1 > 2) continue; // Not close enough
+                    
+                    size_t idx1 = truck_events[i].second;
+                    size_t idx2 = truck_events[i+1].second;
+                    
+                    if (!ENABLE_MERGE_STRATEGIES) continue;
+                    
+                    auto merge_result = tryMergeTrips(
+                        sol.resupply_events[idx1],
+                        sol.resupply_events[idx2],
+                        data, trucks, Drone_Available_Time
+                    );
+                    
+                    if (merge_result.second > 0.01) { // Improvement threshold
+                        sol.resupply_events[idx1] = merge_result.first;
+                        sol.resupply_events.erase(sol.resupply_events.begin() + idx2);
+                        improved = true;
+                        break; // Restart after structure change
+                    }
+                }
+                if (improved) break;
+            }
+            
+            if (improved) continue; // Go to next iteration
+            
+            // STRATEGY 2: Temporal Clustering (medium priority)
+            // Merge trips with similar ready times
+            for (size_t i = 0; i < sol.resupply_events.size() && !improved; ++i) {
+                for (size_t j = i + 1; j < sol.resupply_events.size(); ++j) {
+                    if (sol.resupply_events[i].truck_id != sol.resupply_events[j].truck_id)
+                        continue;
+                    
+                    // Calculate average ready times
+                    double avg_ready1 = 0, avg_ready2 = 0;
+                    for (int c : sol.resupply_events[i].customer_ids)
+                        avg_ready1 += data.readyTimes[c];
+                    for (int c : sol.resupply_events[j].customer_ids)
+                        avg_ready2 += data.readyTimes[c];
+                    
+                    avg_ready1 /= sol.resupply_events[i].customer_ids.size();
+                    avg_ready2 /= sol.resupply_events[j].customer_ids.size();
+                    
+                    if (abs(avg_ready1 - avg_ready2) > 20) continue; // Too far apart
+                    
+                    if (!ENABLE_MERGE_STRATEGIES) continue;
+                    
+                    auto merge_result = tryMergeTrips(
+                        sol.resupply_events[i],
+                        sol.resupply_events[j],
+                        data, trucks, Drone_Available_Time
+                    );
+                    
+                    if (merge_result.second > 0.01) {
+                        sol.resupply_events[i] = merge_result.first;
+                        sol.resupply_events.erase(sol.resupply_events.begin() + j);
+                        improved = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (improved) continue;
+            
+            // STRATEGY 3: Spatial Clustering (lowest priority)
+            // Merge trips with nearby customers
+            for (size_t i = 0; i < sol.resupply_events.size() && !improved; ++i) {
+                for (size_t j = i + 1; j < sol.resupply_events.size(); ++j) {
+                    if (sol.resupply_events[i].truck_id != sol.resupply_events[j].truck_id)
+                        continue;
+                    
+                    // Calculate average distance between customers
+                    double avg_dist = 0;
+                    int count = 0;
+                    for (int c1 : sol.resupply_events[i].customer_ids) {
+                        for (int c2 : sol.resupply_events[j].customer_ids) {
+                            avg_dist += getDroneDistance(data, c1, c2);
+                            count++;
+                        }
+                    }
+                    avg_dist /= count;
+                    
+                    if (avg_dist > 5.0) continue; // Too far apart
+                    
+                    if (!ENABLE_MERGE_STRATEGIES) continue;
+                    
+                    auto merge_result = tryMergeTrips(
+                        sol.resupply_events[i],
+                        sol.resupply_events[j],
+                        data, trucks, Drone_Available_Time
+                    );
+                    
+                    if (merge_result.second > 0.01) {
+                        sol.resupply_events[i] = merge_result.first;
+                        sol.resupply_events.erase(sol.resupply_events.begin() + j);
+                        improved = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    // ========== END MERGE STRATEGIES ==========
+        // Tß║Ñt cß║ú xe vß╗ü depot
     for (int i = 0; i < data.numTrucks; ++i) {
         if (trucks[i].current_position != data.depotIndex) {
             double T_Return_Depot = trucks[i].available_time + 

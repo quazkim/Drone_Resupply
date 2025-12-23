@@ -105,12 +105,14 @@ void printSolution(const PDPSolution& solution, const PDPData& data) {
             cout << "   | Timeline:" << endl;
             cout << "   |   - Drone roi depot:     " << setw(6) << fixed << setprecision(1) << event.drone_depart_time << " phut" << endl;
             
-            for (size_t j = 0; j < event.customer_ids.size(); j++) {
-                cout << "   |   [Customer " << event.customer_ids[j] << "]" << endl;
-                cout << "   |     - Drone den:        " << setw(6) << event.arrive_times[j] << " phut" << endl;
-                cout << "   |     - Xe den:           " << setw(6) << event.truck_arrive_times[j] << " phut" << endl;
-                cout << "   |     - Bat dau resupply: " << setw(6) << event.resupply_starts[j] << " phut" << endl;
-                cout << "   |     - Ket thuc:         " << setw(6) << event.resupply_ends[j] << " phut" << endl;
+            // CHI IN RESUPPLY POINT (customer dau tien) - drone chi gap truck 1 lan
+            if (!event.arrive_times.empty()) {
+                int resupply_point = event.customer_ids[0];
+                cout << "   |   [Resupply Point: Customer " << resupply_point << "]" << endl;
+                cout << "   |     - Drone den:        " << setw(6) << event.arrive_times[0] << " phut" << endl;
+                cout << "   |     - Xe den:           " << setw(6) << event.truck_arrive_times[0] << " phut" << endl;
+                cout << "   |     - Bat dau resupply: " << setw(6) << event.resupply_starts[0] << " phut" << endl;
+                cout << "   |     - Ket thuc:         " << setw(6) << event.resupply_ends[0] << " phut" << endl;
             }
             
             cout << "   |   - Drone ve depot:      " << setw(6) << event.drone_return_time << " phut" << endl;
