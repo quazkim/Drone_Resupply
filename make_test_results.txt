@@ -1,0 +1,47 @@
+================================================================================
+RUNNING 15 TEST INSTANCES FROM INSTANCES 2 (POPULATION = 200)
+================================================================================
+
+Testing U_10_0.5_Num_1.txt                  (Paper:  131 min)... GA+Tabu:  109.79 | Diff: -16.19% ✓
+Testing U_10_0.5_Num_2.txt                  (Paper:  160 min)... GA+Tabu:  163.17 | Diff:  +1.98% ✗
+Testing U_10_0.5_Num_3.txt                  (Paper:  134 min)... GA+Tabu:  134.40 | Diff:  +0.30% ✗
+Testing U_10_0.5_Num_4.txt                  (Paper:  150 min)... GA+Tabu:  153.80 | Diff:  +2.53% ✗
+Testing U_10_0.5_Num_5.txt                  (Paper:  124 min)... GA+Tabu:  131.32 | Diff:  +5.90% ✗
+Testing U_10_1.0_Num_1.txt                  (Paper:  173 min)... GA+Tabu:  178.97 | Diff:  +3.45% ✗
+Testing U_10_1.0_Num_2.txt                  (Paper:  214 min)... GA+Tabu:  212.36 | Diff:  -0.77% ✓
+Testing U_10_1.0_Num_3.txt                  (Paper:  193 min)... GA+Tabu:  190.25 | Diff:  -1.42% ✓
+Testing U_10_1.0_Num_4.txt                  (Paper:  234 min)... GA+Tabu:  236.67 | Diff:  +1.14% ✗
+Testing U_10_1.0_Num_5.txt                  (Paper:  175 min)... GA+Tabu:  176.14 | Diff:  +0.65% ✗
+Testing U_10_1.5_Num_1.txt                  (Paper:  246 min)... GA+Tabu:  247.53 | Diff:  +0.62% ✗
+Testing U_10_1.5_Num_2.txt                  (Paper:  199 min)... GA+Tabu:  199.81 | Diff:  +0.41% ✗
+Testing U_10_1.5_Num_3.txt                  (Paper:  248 min)... GA+Tabu:  249.51 | Diff:  +0.61% ✗
+Testing U_10_1.5_Num_4.txt                  (Paper:  350 min)... GA+Tabu:  348.39 | Diff:  -0.46% ✓
+Testing U_10_1.5_Num_5.txt                  (Paper:  271 min)... GA+Tabu:  272.85 | Diff:  +0.68% ✗
+
+================================================================================
+SUMMARY TABLE (POPULATION = 200, Instances 2)
+================================================================================
+Instance                            Paper      GA+Tabu    Diff %     Status    
+--------------------------------------------------------------------------------
+U_10_0.5_Num_1.txt                  131        109.79     -16.19     BETTER    
+U_10_0.5_Num_2.txt                  160        163.17     +1.98      WORSE     
+U_10_0.5_Num_3.txt                  134        134.40     +0.30      WORSE     
+U_10_0.5_Num_4.txt                  150        153.80     +2.53      WORSE     
+U_10_0.5_Num_5.txt                  124        131.32     +5.90      WORSE     
+U_10_1.0_Num_1.txt                  173        178.97     +3.45      WORSE     
+U_10_1.0_Num_2.txt                  214        212.36     -0.77      BETTER    
+U_10_1.0_Num_3.txt                  193        190.25     -1.42      BETTER    
+U_10_1.0_Num_4.txt                  234        236.67     +1.14      WORSE     
+U_10_1.0_Num_5.txt                  175        176.14     +0.65      WORSE     
+U_10_1.5_Num_1.txt                  246        247.53     +0.62      WORSE     
+U_10_1.5_Num_2.txt                  199        199.81     +0.41      WORSE     
+U_10_1.5_Num_3.txt                  248        249.51     +0.61      WORSE     
+U_10_1.5_Num_4.txt                  350        348.39     -0.46      BETTER    
+U_10_1.5_Num_5.txt                  271        272.85     +0.68      WORSE     
+
+Better: 4/15 (26.7%)
+Equal:  0/15 (0.0%)
+Worse:  11/15 (73.3%)
+Average difference: -0.04% (GA+Tabu wins on average)
+Total runtime: 0.4 minutes
+

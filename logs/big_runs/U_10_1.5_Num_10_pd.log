@@ -1,0 +1,294 @@
+
++========================================================+
+|     PDP SOLVER - GA + TABU SEARCH                  |
++========================================================+
+
+Reading instance: U_10_1.5_Num_10_pd.txt
+Reading: U_10_1.5_Num_10_pd.txt
+Truck (Manhattan) and Drone (Euclidean) distance matrices built.
+Loaded 11 nodes, 10 customers.
+
+Instance details:
+  Customers: 10
+  Trucks: 2
+  Drones: 2
+  Drone endurance: 90 minutes
+
+=========================================
+  GENETIC ALGORITHM + TABU SEARCH (PDP)
+=========================================
+Population size: 50
+Max generations: 50
+Base mutation rate: 0.1 (adaptive)
+Tabu threshold: 10% of max gen without improvement
+Adaptive operators: ENABLED
+
+[1] Initializing population...
+PDP Population distribution (NO SEPARATOR):
+   Random: 5
+   Greedy Time: 15
+   Sweep: 15
+   Nearest Neighbor: 15
+Generated 50 PDP individuals (sequence only, no separators)
+Initial best cost: 441.92 (penalty: 0.00)
+Gen 0: New best = 321.80 (penalty: 0.00, mut_rate: 0.100)
+Gen 1: New best = 283.76 (penalty: 0.00, mut_rate: 0.100)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+  Tabu iter 50: best=249.480 current=249.480
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+[ADAPT] Gen 10 - Crossover rates: 0.39 0.30 0.21 0.30 , Mutation rate: 0.120
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+[ADAPT] Gen 20 - Crossover rates: 0.38 0.29 0.22 0.30 , Mutation rate: 0.173
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+[ADAPT] Gen 30 - Crossover rates: 0.37 0.29 0.23 0.31 , Mutation rate: 0.249
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+[ADAPT] Gen 40 - Crossover rates: 0.37 0.29 0.23 0.31 , Mutation rate: 0.358
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 249.48 (penalty: 0.00)
+
+=========================================
+  GA + TABU COMPLETED
+=========================================
+Final best cost: 249.48 (penalty: 0.00)
+
+[ADAPTIVE STATS]
+Final mutation rate: 0.430
+Crossover success rates: [0]:0.01 [1]:0.01 [2]:0.01 [3]:0.01 
+Mutation success rates: [0]:0.03 [1]:0.02 [2]:0.06 [3]:0.06 [4]:0.00 
+
++========================================================+
+|     INTEGRATED LOCAL SEARCH (Truck + Drone)         |
++========================================================+
+
+[ADAPTIVE LS] Starting Adaptive Local Search with 11 operators...
+[ADAPTIVE LS] Initial C_max: 249.48 minutes
+[ADAPTIVE LS] Truck routes: 2
+[ADAPTIVE LS] Drone trips: 5
+[ADAPTIVE LS] Iter 0: Drone improved to 249.36 min
+[ADAPTIVE LS] Iter 1: Drone improved to 237.10 min
+[ADAPTIVE LS] Iter 2: Drone improved to 220.68 min
+[ADAPTIVE LS] Perturbation #1 (diversification)
+
+[ADAPTIVE LS] ====== FINAL RESULTS ======
+[ADAPTIVE LS] Completed after 50 iterations
+[ADAPTIVE LS] Final C_max: 220.68 minutes
+[ADAPTIVE LS] Improvements: Truck=0, Drone=3
+[ADAPTIVE LS] Perturbations used: 1
+[ADAPTIVE LS] Total improvement: 28.80 minutes (11.5%)
+
+[ADAPTIVE] Operator Performance Statistics:
+-------------------------------------------------------------
+              Operator  Attempts   Success     Rate(%)    AvgImprv    Weight
+-------------------------------------------------------------
+            Truck-2Opt        50         0        0.0%        0.00      0.50
+            Truck-Swap        50         0        0.0%        0.00      0.50
+        Truck-Relocate        50         0        0.0%        0.00      0.50
+   Truck-CrossExchange        50         0        0.0%        0.00      0.50
+         Drone-Reorder        50         0        0.0%        0.00      0.50
+            Drone-Swap        50        25       50.0%       15.25      2.70
+            Drone-Move        50         0        0.0%        0.00      0.50
+           Drone-Merge        50         0        0.0%        0.00      0.50
+           Drone-Split        50         0        0.0%        0.00      0.50
+        Drone-Reassign        50         1        2.0%        8.68      1.42
+  Drone-InsertIntoTrip        50         0        0.0%        0.00      0.50
+-------------------------------------------------------------
+
++========================================================+
+|               FINAL SOLUTION                       |
++========================================================+
+
++=============================================================+
+|              SOLUTION DETAILS (Thoi gian thuc te)          |
++=============================================================+
+
+ TONG QUAN:
+   Total Cost (C_max): 220.68 phut
+   Feasible: YES
+
+CHI TIET CAC XE TAI:
+
+   +-- Xe 0 --------------------------------------
+   | Hoan thanh: 200.76 phut
+   | Route: 0(D) -> 5(P) -> 4(DL) -> 0(D) -> 7(D) -> 6(D) -> 0(D) -> 8(D) -> 10(D) -> 0(D)
+   | Timeline:
+   |    0. Node  0 ( D): Den=   0.0' Roi=   0.0'
+   |    1. Node  5 ( P): Den=  19.8' Roi=  22.8'
+   |    2. Node  4 (DL): Den=  43.5' Roi=  46.5'
+   |    3. Node  0 ( D): Den=  53.3' Roi=  58.3'
+   |    4. Node  7 ( D): Den=  81.0' Roi=  84.0'
+   |    5. Node  6 ( D): Den= 102.8' Roi= 105.8'
+   |    6. Node  0 ( D): Den= 131.7' Roi= 136.7'
+   |    7. Node  8 ( D): Den= 156.0' Roi= 159.0'
+   |    8. Node 10 ( D): Den= 180.8' Roi= 183.8'
+   |    9. Node  0 ( D): Den= 195.8' Roi= 200.8'
+   +-----------------------------------------------------
+
+   +-- Xe 1 --------------------------------------
+   | Hoan thanh: 186.60 phut
+   | Route: 0(D) -> 2(D) -> 3(D) -> 9(D) -> 1(D) -> 0(D)
+   | Timeline:
+   |    0. Node  0 ( D): Den=   0.0' Roi=   0.0'
+   |    1. Node  2 ( D): Den=  19.9' Roi=  22.9'
+   |    2. Node  3 ( D): Den=  56.9' Roi= 120.4'
+   |    3. Node  9 ( D): Den= 127.5' Roi= 130.5'
+   |    4. Node  1 ( D): Den= 158.3' Roi= 161.3'
+   |    5. Node  0 ( D): Den= 181.6' Roi= 186.6'
+   +-----------------------------------------------------
+
+CHI TIET DRONE RESUPPLY (WITH CONSOLIDATION):
+
+   +-- Resupply Trip #1 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 1
+   | So khach hang: 1 customers
+   | Customers: Node 3
+   | Total flight time: 29.8 phut
+   | Timeline:
+   |   - Drone roi depot:      100.0 phut
+   |   [Customer 3]
+   |     - Drone den:         112.4 phut
+   |     - Xe den:             90.8 phut
+   |     - Bat dau resupply:  112.4 phut
+   |     - Ket thuc:          120.4 phut
+   |   - Drone ve depot:       132.8 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #2 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 0
+   | So khach hang: 1 customers
+   | Customers: Node 9
+   | Total flight time: 27.8 phut
+   | Timeline:
+   |   - Drone roi depot:      152.0 phut
+   |   [Customer 9]
+   |     - Drone den:         163.4 phut
+   |     - Xe den:             31.3 phut
+   |     - Bat dau resupply:  163.4 phut
+   |     - Ket thuc:          171.4 phut
+   |   - Drone ve depot:       182.8 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #3 ----------------------------------
+   | Drone: Drone 1 | Xe: Xe 1
+   | So khach hang: 1 customers
+   | Customers: Node 6
+   | Total flight time: 24.3 phut
+   | Timeline:
+   |   - Drone roi depot:      125.0 phut
+   |   [Customer 6]
+   |     - Drone den:         134.7 phut
+   |     - Xe den:             25.9 phut
+   |     - Bat dau resupply:  134.7 phut
+   |     - Ket thuc:          142.7 phut
+   |   - Drone ve depot:       152.3 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #4 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 1
+   | So khach hang: 1 customers
+   | Customers: Node 10
+   | Total flight time: 13.6 phut
+   | Timeline:
+   |   - Drone roi depot:      187.8 phut
+   |   [Customer 10]
+   |     - Drone den:         192.1 phut
+   |     - Xe den:             11.9 phut
+   |     - Bat dau resupply:  192.1 phut
+   |     - Ket thuc:          200.1 phut
+   |   - Drone ve depot:       204.4 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #5 ----------------------------------
+   | Drone: Drone 1 | Xe: Xe 0
+   | So khach hang: 1 customers
+   | Customers: Node 1
+   | Total flight time: 22.7 phut
+   | Timeline:
+   |   - Drone roi depot:      195.0 phut
+   |   [Customer 1]
+   |     - Drone den:         203.8 phut
+   |     - Xe den:             20.3 phut
+   |     - Bat dau resupply:  203.8 phut
+   |     - Ket thuc:          211.8 phut
+   |   - Drone ve depot:       220.7 phut
+   +-----------------------------------------------------
+
+ THOI GIAN HOAN THANH CAC DRONE:
+   Drone 0: 233.21 phut
+   Drone 1: 241.86 phut
+
+=============================================================
+
+=========================================
+SUMMARY:
+  Cost before Local Search: 249.48 minutes
+  Cost after Local Search: 220.68 minutes
+  Improvement by LS: 28.80 minutes (11.5%)
+  Total Penalty: 0.0
+  Feasible: YES
+  Resupply Events: 5
+=========================================

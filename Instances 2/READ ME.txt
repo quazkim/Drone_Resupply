@@ -1,0 +1,1 @@
+Instances are named U_n_beta_Num_i.txt, where U denotes uniform customer distribution, n the number of customers, beta the factor that defines the spread of orders release dates, and i the instance number.

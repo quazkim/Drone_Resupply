@@ -1,0 +1,8 @@
+
++========================================================+
+|     PDP SOLVER - GA + TABU SEARCH                  |
++========================================================+
+
+Reading instance: U_100_3.0_Num_2_pd.txt
+Cannot open file: U_100_3.0_Num_2_pd.txt
+Error: Failed to read instance file!

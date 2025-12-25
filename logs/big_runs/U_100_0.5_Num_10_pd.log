@@ -1,0 +1,827 @@
+
++========================================================+
+|     PDP SOLVER - GA + TABU SEARCH                  |
++========================================================+
+
+Reading instance: U_100_0.5_Num_10_pd.txt
+Reading: U_100_0.5_Num_10_pd.txt
+Truck (Manhattan) and Drone (Euclidean) distance matrices built.
+Loaded 101 nodes, 99 customers.
+
+Instance details:
+  Customers: 99
+  Trucks: 2
+  Drones: 2
+  Drone endurance: 90 minutes
+
+=========================================
+  GENETIC ALGORITHM + TABU SEARCH (PDP)
+=========================================
+Population size: 50
+Max generations: 50
+Base mutation rate: 0.1 (adaptive)
+Tabu threshold: 10% of max gen without improvement
+Adaptive operators: ENABLED
+
+[1] Initializing population...
+PDP Population distribution (NO SEPARATOR):
+   Random: 5
+   Greedy Time: 15
+   Sweep: 15
+   Nearest Neighbor: 15
+Generated 50 PDP individuals (sequence only, no separators)
+Initial best cost: 2191.68 (penalty: 28000.00)
+Gen 0: New best = 2212.16 (penalty: 19000.00, mut_rate: 0.100)
+Gen 1: New best = 1911.29 (penalty: 17000.00, mut_rate: 0.100)
+Gen 2: New best = 1865.24 (penalty: 16000.00, mut_rate: 0.100)
+Gen 3: New best = 2077.76 (penalty: 8000.00, mut_rate: 0.100)
+Gen 4: New best = 2045.80 (penalty: 8000.00, mut_rate: 0.100)
+Gen 5: New best = 1941.91 (penalty: 8000.00, mut_rate: 0.100)
+Gen 6: New best = 2019.59 (penalty: 7000.00, mut_rate: 0.090)
+Gen 7: New best = 1977.00 (penalty: 7000.00, mut_rate: 0.090)
+Gen 8: New best = 1960.75 (penalty: 7000.00, mut_rate: 0.090)
+Gen 9: New best = 2104.64 (penalty: 6000.00, mut_rate: 0.090)
+[ADAPT] Gen 10 - Crossover rates: 0.27 0.38 0.16 0.39 , Mutation rate: 0.081
+Gen 11: New best = 2073.80 (penalty: 6000.00, mut_rate: 0.081)
+Gen 12: New best = 1998.16 (penalty: 6000.00, mut_rate: 0.081)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+  Tabu iter 50: best=2426.574 current=2443.691
+[TABU] After Tabu Search: 1426.57 (penalty: 1000.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+  Tabu iter 50: best=2373.17 current=2391.32
+[TABU] After Tabu Search: 1362.86 (penalty: 1000.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+  Tabu iter 50: best=2302.70 current=2307.00
+[TABU] After Tabu Search: 1260.41 (penalty: 1000.00)
+[ADAPT] Gen 20 - Crossover rates: 0.25 0.41 0.16 0.38 , Mutation rate: 0.097
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+  Tabu iter 50: best=2244.811 current=2280.051
+[TABU] After Tabu Search: 1244.81 (penalty: 1000.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+  Tabu iter 50: best=2239.94 current=2294.18
+[TABU] After Tabu Search: 1335.56 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+  Tabu iter 50: best=1271.50 current=1271.50
+[TABU] After Tabu Search: 1271.50 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+  Tabu iter 50: best=1248.62 current=1275.60
+[TABU] After Tabu Search: 1248.62 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+  Tabu iter 50: best=1199.28 current=1199.28
+[TABU] After Tabu Search: 1197.32 (penalty: 0.00)
+[ADAPT] Gen 30 - Crossover rates: 0.25 0.37 0.23 0.36 , Mutation rate: 0.140
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 1197.32 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 1197.32 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 1197.32 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+  Tabu iter 50: best=1195.05 current=1232.74
+[TABU] After Tabu Search: 1195.05 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+  Tabu iter 50: best=1193.55 current=1233.96
+[TABU] After Tabu Search: 1193.55 (penalty: 0.00)
+[ADAPT] Gen 40 - Crossover rates: 0.24 0.36 0.23 0.37 , Mutation rate: 0.202
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+[TABU] After Tabu Search: 1193.55 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+  Tabu iter 50: best=1179.67 current=1275.52
+[TABU] After Tabu Search: 1179.67 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+  Tabu iter 50: best=1178.48 current=1255.06
+[TABU] After Tabu Search: 1178.48 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+  Tabu iter 50: best=1175.31 current=1182.98
+[TABU] After Tabu Search: 1175.31 (penalty: 0.00)
+
+[TABU] No improvement for 2 generations. Applying Tabu Search...
+  Tabu iter 50: best=1165.62 current=1165.62
+[TABU] After Tabu Search: 1165.62 (penalty: 0.00)
+
+=========================================
+  GA + TABU COMPLETED
+=========================================
+Final best cost: 1165.62 (penalty: 0.00)
+
+[ADAPTIVE STATS]
+Final mutation rate: 0.242
+Crossover success rates: [0]:0.02 [1]:0.04 [2]:0.02 [3]:0.04 
+Mutation success rates: [0]:0.11 [1]:0.03 [2]:0.08 [3]:0.17 [4]:0.13 
+
++========================================================+
+|     INTEGRATED LOCAL SEARCH (Truck + Drone)         |
++========================================================+
+
+[ADAPTIVE LS] Starting Adaptive Local Search with 11 operators...
+[ADAPTIVE LS] Initial C_max: 1165.62 minutes
+[ADAPTIVE LS] Truck routes: 2
+[ADAPTIVE LS] Drone trips: 25
+[ADAPTIVE LS] Perturbation #1 (diversification)
+[ADAPTIVE LS] Perturbation #2 (diversification)
+
+[ADAPTIVE LS] ====== FINAL RESULTS ======
+[ADAPTIVE LS] Completed after 50 iterations
+[ADAPTIVE LS] Final C_max: 1165.62 minutes
+[ADAPTIVE LS] Improvements: Truck=0, Drone=0
+[ADAPTIVE LS] Perturbations used: 2
+[ADAPTIVE LS] No improvement found (solution may be near optimal)
+
+[ADAPTIVE] Operator Performance Statistics:
+-------------------------------------------------------------
+              Operator  Attempts   Success     Rate(%)    AvgImprv    Weight
+-------------------------------------------------------------
+            Truck-2Opt        50         9       18.0%       15.43      2.29
+            Truck-Swap        50        16       32.0%       42.83      5.00
+        Truck-Relocate        50        25       50.0%       68.96      5.00
+   Truck-CrossExchange        50         0        0.0%        0.00      0.50
+         Drone-Reorder        50         0        0.0%        0.00      0.50
+            Drone-Swap        50        10       20.0%        6.77      1.53
+            Drone-Move        50        15       30.0%        4.96      1.47
+           Drone-Merge        50        18       36.0%        8.29      1.93
+           Drone-Split        50         0        0.0%        0.00      0.50
+        Drone-Reassign        50         3        6.0%        0.04      0.60
+  Drone-InsertIntoTrip        50        25       50.0%       39.85      5.00
+-------------------------------------------------------------
+
++========================================================+
+|               FINAL SOLUTION                       |
++========================================================+
+
++=============================================================+
+|              SOLUTION DETAILS (Thoi gian thuc te)          |
++=============================================================+
+
+ TONG QUAN:
+   Total Cost (C_max): 1165.62 phut
+   Feasible: YES
+
+CHI TIET CAC XE TAI:
+
+   +-- Xe 0 --------------------------------------
+   | Hoan thanh: 1163.05 phut
+   | Route: 0(D) -> 47(D) -> 67(D) -> 0(D) -> 95(D) -> 0(D) -> 37(D) -> 74(D) -> 24(D) -> 26(D) -> 0(D) -> 82(D) -> 0(D) -> 72(D) -> 71(P) -> 32(D) -> 97(D) -> 29(D) -> 91(D) -> 4(D) -> 48(DL) -> 0(D) -> 66(D) -> 80(P) -> 89(D) -> 41(D) -> 13(D) -> 31(DL) -> 0(D) -> 94(D) -> 0(D) -> 1(D) -> 0(D) -> 15(D) -> 0(D) -> 11(D) -> 0(D) -> 86(D) -> 93(D) -> 12(D) -> 0(D) -> 49(D) -> 0(D) -> 28(D) -> 2(D) -> 98(D) -> 0(D) -> 8(D) -> 69(D) -> 51(D) -> 0(D) -> 60(D) -> 61(D) -> 42(D) -> 68(D) -> 59(P) -> 85(DL) -> 0(D) -> 100(D) -> 36(D) -> 56(D) -> 0(D)
+   | Timeline:
+   |    0. Node  0 ( D): Den=   0.0' Roi=   0.0'
+   |    1. Node 47 ( D): Den=  52.4' Roi=  55.4'
+   |    2. Node 67 ( D): Den=  69.0' Roi=  77.0'
+   |    3. Node  0 ( D): Den=  93.3' Roi=  98.3'
+   |    4. Node 95 ( D): Den= 105.1' Roi= 108.1'
+   |    5. Node  0 ( D): Den= 114.9' Roi= 119.9'
+   |    6. Node 37 ( D): Den= 144.3' Roi= 147.3'
+   |    7. Node 74 ( D): Den= 151.0' Roi= 159.0'
+   |    8. Node 24 ( D): Den= 159.1' Roi= 170.8'
+   |    9. Node 26 ( D): Den= 167.7' Roi= 183.6'
+   |   10. Node  0 ( D): Den= 198.6' Roi= 203.6'
+   |   11. Node 82 ( D): Den= 211.1' Roi= 214.1'
+   |   12. Node  0 ( D): Den= 221.5' Roi= 226.5'
+   |   13. Node 72 ( D): Den= 250.1' Roi= 253.1'
+   |   14. Node 71 ( P): Den= 254.8' Roi= 257.8'
+   |   15. Node 32 ( D): Den= 269.1' Roi= 277.1'
+   |   16. Node 97 ( D): Den= 298.5' Roi= 306.5'
+   |   17. Node 29 ( D): Den= 311.5' Roi= 319.5'
+   |   18. Node 91 ( D): Den= 313.0' Roi= 328.4'
+   |   19. Node  4 ( D): Den= 318.4' Roi= 342.8'
+   |   20. Node 48 (DL): Den= 357.3' Roi= 360.3'
+   |   21. Node  0 ( D): Den= 375.9' Roi= 380.9'
+   |   22. Node 66 ( D): Den= 395.2' Roi= 398.2'
+   |   23. Node 80 ( P): Den= 413.3' Roi= 416.3'
+   |   24. Node 89 ( D): Den= 425.0' Roi= 433.0'
+   |   25. Node 41 ( D): Den= 422.1' Roi= 444.7'
+   |   26. Node 13 ( D): Den= 432.5' Roi= 458.2'
+   |   27. Node 31 (DL): Den= 494.0' Roi= 497.0'
+   |   28. Node  0 ( D): Den= 515.0' Roi= 520.0'
+   |   29. Node 94 ( D): Den= 537.9' Roi= 540.9'
+   |   30. Node  0 ( D): Den= 558.8' Roi= 563.8'
+   |   31. Node  1 ( D): Den= 569.2' Roi= 572.2'
+   |   32. Node  0 ( D): Den= 577.5' Roi= 582.5'
+   |   33. Node 15 ( D): Den= 605.9' Roi= 608.9'
+   |   34. Node  0 ( D): Den= 632.2' Roi= 637.2'
+   |   35. Node 11 ( D): Den= 648.6' Roi= 651.6'
+   |   36. Node  0 ( D): Den= 663.0' Roi= 668.0'
+   |   37. Node 86 ( D): Den= 681.7' Roi= 684.7'
+   |   38. Node 93 ( D): Den= 693.2' Roi= 701.2'
+   |   39. Node 12 ( D): Den= 703.9' Roi= 713.3'
+   |   40. Node  0 ( D): Den= 743.3' Roi= 748.3'
+   |   41. Node 49 ( D): Den= 763.8' Roi= 766.8'
+   |   42. Node  0 ( D): Den= 782.3' Roi= 787.3'
+   |   43. Node 28 ( D): Den= 809.7' Roi= 812.7'
+   |   44. Node  2 ( D): Den= 818.1' Roi= 826.1'
+   |   45. Node 98 ( D): Den= 833.6' Roi= 843.8'
+   |   46. Node  0 ( D): Den= 853.8' Roi= 858.8'
+   |   47. Node  8 ( D): Den= 889.9' Roi= 892.9'
+   |   48. Node 69 ( D): Den= 898.1' Roi= 908.3'
+   |   49. Node 51 ( D): Den= 918.9' Roi= 926.9'
+   |   50. Node  0 ( D): Den= 934.0' Roi= 939.0'
+   |   51. Node 60 ( D): Den= 963.6' Roi= 966.6'
+   |   52. Node 61 ( D): Den= 969.7' Roi= 992.3'
+   |   53. Node 42 ( D): Den=1011.1' Roi=1027.0'
+   |   54. Node 68 ( D): Den=1017.6' Roi=1038.5'
+   |   55. Node 59 ( P): Den=1057.8' Roi=1060.8'
+   |   56. Node 85 (DL): Den=1068.5' Roi=1071.5'
+   |   57. Node  0 ( D): Den=1083.2' Roi=1088.2'
+   |   58. Node 100 ( D): Den=1107.8' Roi=1110.8'
+   |   59. Node 36 ( D): Den=1122.8' Roi=1130.8'
+   |   60. Node 56 ( D): Den=1120.7' Roi=1142.7'
+   |   61. Node  0 ( D): Den=1163.1' Roi=1163.1'
+   +-----------------------------------------------------
+
+   +-- Xe 1 --------------------------------------
+   | Hoan thanh: 1165.62 phut
+   | Route: 0(D) -> 20(D) -> 0(D) -> 30(D) -> 0(D) -> 43(D) -> 92(D) -> 73(D) -> 88(D) -> 0(D) -> 76(D) -> 33(D) -> 77(D) -> 17(D) -> 9(D) -> 50(D) -> 0(D) -> 79(D) -> 0(D) -> 44(D) -> 0(D) -> 27(D) -> 65(D) -> 0(D) -> 84(D) -> 0(D) -> 64(D) -> 0(D) -> 99(D) -> 7(D) -> 96(D) -> 0(D) -> 46(D) -> 53(D) -> 55(D) -> 62(P) -> 45(P) -> 18(D) -> 23(D) -> 52(DL) -> 90(D) -> 5(DL) -> 0(D) -> 34(D) -> 0(D) -> 38(D) -> 25(D) -> 87(D) -> 83(D) -> 14(P) -> 75(DL) -> 63(P) -> 39(D) -> 16(DL) -> 0(D) -> 3(D) -> 57(D) -> 21(D) -> 0(D) -> 22(D) -> 6(P) -> 40(P) -> 19(P) -> 10(D) -> 78(D) -> 58(D) -> 54(DL) -> 35(DL) -> 70(DL) -> 0(D)
+   | Timeline:
+   |    0. Node  0 ( D): Den=   0.0' Roi=   0.0'
+   |    1. Node 20 ( D): Den=  24.9' Roi=  27.9'
+   |    2. Node  0 ( D): Den=  36.8' Roi=  41.8'
+   |    3. Node 30 ( D): Den=  54.5' Roi=  57.5'
+   |    4. Node  0 ( D): Den=  70.2' Roi=  75.2'
+   |    5. Node 43 ( D): Den=  86.5' Roi=  89.5'
+   |    6. Node 92 ( D): Den=  90.0' Roi=  98.0'
+   |    7. Node 73 ( D): Den=  98.0' Roi= 110.1'
+   |    8. Node 88 ( D): Den= 118.9' Roi= 126.9'
+   |    9. Node  0 ( D): Den= 137.5' Roi= 142.5'
+   |   10. Node 76 ( D): Den= 170.4' Roi= 173.4'
+   |   11. Node 33 ( D): Den= 181.3' Roi= 189.3'
+   |   12. Node 77 ( D): Den= 178.0' Roi= 200.0'
+   |   13. Node 17 ( D): Den= 183.7' Roi= 213.3'
+   |   14. Node  9 ( D): Den= 229.8' Roi= 237.8'
+   |   15. Node 50 ( D): Den= 216.7' Roi= 253.9'
+   |   16. Node  0 ( D): Den= 269.1' Roi= 274.1'
+   |   17. Node 79 ( D): Den= 278.9' Roi= 281.9'
+   |   18. Node  0 ( D): Den= 286.7' Roi= 291.7'
+   |   19. Node 44 ( D): Den= 314.9' Roi= 317.9'
+   |   20. Node  0 ( D): Den= 341.2' Roi= 346.2'
+   |   21. Node 27 ( D): Den= 357.2' Roi= 360.2'
+   |   22. Node 65 ( D): Den= 362.8' Roi= 370.8'
+   |   23. Node  0 ( D): Den= 379.2' Roi= 384.2'
+   |   24. Node 84 ( D): Den= 389.1' Roi= 392.1'
+   |   25. Node  0 ( D): Den= 397.1' Roi= 402.1'
+   |   26. Node 64 ( D): Den= 423.0' Roi= 426.0'
+   |   27. Node  0 ( D): Den= 447.0' Roi= 452.0'
+   |   28. Node 99 ( D): Den= 470.0' Roi= 473.0'
+   |   29. Node  7 ( D): Den= 488.6' Roi= 496.6'
+   |   30. Node 96 ( D): Den= 488.9' Roi= 508.1'
+   |   31. Node  0 ( D): Den= 514.4' Roi= 519.4'
+   |   32. Node 46 ( D): Den= 541.3' Roi= 544.3'
+   |   33. Node 53 ( D): Den= 552.2' Roi= 560.2'
+   |   34. Node 55 ( D): Den= 546.1' Roi= 571.6'
+   |   35. Node 62 ( P): Den= 575.9' Roi= 578.9'
+   |   36. Node 45 ( P): Den= 599.8' Roi= 602.8'
+   |   37. Node 18 ( D): Den= 606.0' Roi= 614.0'
+   |   38. Node 23 ( D): Den= 626.1' Roi= 634.1'
+   |   39. Node 52 (DL): Den= 647.8' Roi= 650.8'
+   |   40. Node 90 ( D): Den= 667.4' Roi= 675.4'
+   |   41. Node  5 (DL): Den= 679.0' Roi= 682.0'
+   |   42. Node  0 ( D): Den= 686.1' Roi= 691.1'
+   |   43. Node 34 ( D): Den= 704.7' Roi= 707.7'
+   |   44. Node  0 ( D): Den= 721.2' Roi= 726.2'
+   |   45. Node 38 ( D): Den= 751.6' Roi= 754.6'
+   |   46. Node 25 ( D): Den= 757.3' Roi= 765.3'
+   |   47. Node 87 ( D): Den= 762.6' Roi= 777.3'
+   |   48. Node 83 ( D): Den= 774.9' Roi= 791.7'
+   |   49. Node 14 ( P): Den= 798.2' Roi= 801.2'
+   |   50. Node 75 (DL): Den= 822.7' Roi= 825.7'
+   |   51. Node 63 ( P): Den= 833.3' Roi= 836.3'
+   |   52. Node 39 ( D): Den= 869.9' Roi= 877.9'
+   |   53. Node 16 (DL): Den= 879.4' Roi= 882.4'
+   |   54. Node  0 ( D): Den= 902.1' Roi= 907.1'
+   |   55. Node  3 ( D): Den= 924.2' Roi= 927.2'
+   |   56. Node 57 ( D): Den= 933.3' Roi= 951.5'
+   |   57. Node 21 ( D): Den= 927.8' Roi= 961.4'
+   |   58. Node  0 ( D): Den= 978.3' Roi= 983.3'
+   |   59. Node 22 ( D): Den=1003.3' Roi=1006.3'
+   |   60. Node  6 ( P): Den=1020.2' Roi=1023.2'
+   |   61. Node 40 ( P): Den=1038.4' Roi=1041.4'
+   |   62. Node 19 ( P): Den=1057.4' Roi=1060.4'
+   |   63. Node 10 ( D): Den=1061.1' Roi=1071.0'
+   |   64. Node 78 ( D): Den=1075.2' Roi=1086.6'
+   |   65. Node 58 ( D): Den=1071.8' Roi=1099.5'
+   |   66. Node 54 (DL): Den=1118.1' Roi=1121.1'
+   |   67. Node 35 (DL): Den=1124.1' Roi=1127.1'
+   |   68. Node 70 (DL): Den=1151.2' Roi=1154.2'
+   |   69. Node  0 ( D): Den=1165.6' Roi=1165.6'
+   +-----------------------------------------------------
+
+CHI TIET DRONE RESUPPLY (WITH CONSOLIDATION):
+
+   +-- Resupply Trip #1 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 0
+   | So khach hang: 1 customers
+   | Customers: Node 67
+   | Total flight time: 49.0 phut
+   | Timeline:
+   |   - Drone roi depot:       32.0 phut
+   |   [Customer 67]
+   |     - Drone den:          39.0 phut
+   |     - Xe den:             69.0 phut
+   |     - Bat dau resupply:   69.0 phut
+   |     - Ket thuc:           77.0 phut
+   |   - Drone ve depot:        84.0 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #2 ----------------------------------
+   | Drone: Drone 1 | Xe: Xe 1
+   | So khach hang: 2 customers
+   | Customers: Node 92, Node 73
+   | Total flight time: 55.5 phut
+   | Timeline:
+   |   - Drone roi depot:       53.0 phut
+   |   [Customer 92]
+   |     - Drone den:          57.3 phut
+   |     - Xe den:             90.0 phut
+   |     - Bat dau resupply:   90.0 phut
+   |     - Ket thuc:           98.0 phut
+   |   [Customer 73]
+   |     - Drone den:         102.1 phut
+   |     - Xe den:             98.0 phut
+   |     - Bat dau resupply:  102.1 phut
+   |     - Ket thuc:          110.1 phut
+   |   - Drone ve depot:       114.5 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #3 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 1
+   | So khach hang: 1 customers
+   | Customers: Node 88
+   | Total flight time: 30.8 phut
+   | Timeline:
+   |   - Drone roi depot:       97.0 phut
+   |   [Customer 88]
+   |     - Drone den:         100.9 phut
+   |     - Xe den:            118.9 phut
+   |     - Bat dau resupply:  118.9 phut
+   |     - Ket thuc:          126.9 phut
+   |   - Drone ve depot:       130.8 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #4 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 0
+   | So khach hang: 3 customers
+   | Customers: Node 74, Node 24, Node 26
+   | Total flight time: 44.3 phut
+   | Timeline:
+   |   - Drone roi depot:      135.8 phut
+   |   [Customer 74]
+   |     - Drone den:         143.7 phut
+   |     - Xe den:            151.0 phut
+   |     - Bat dau resupply:  151.0 phut
+   |     - Ket thuc:          159.0 phut
+   |   [Customer 24]
+   |     - Drone den:         162.8 phut
+   |     - Xe den:            159.1 phut
+   |     - Bat dau resupply:  162.8 phut
+   |     - Ket thuc:          170.8 phut
+   |   [Customer 26]
+   |     - Drone den:         175.6 phut
+   |     - Xe den:            167.7 phut
+   |     - Bat dau resupply:  175.6 phut
+   |     - Ket thuc:          183.6 phut
+   |   - Drone ve depot:       189.1 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #5 ----------------------------------
+   | Drone: Drone 1 | Xe: Xe 1
+   | So khach hang: 3 customers
+   | Customers: Node 33, Node 77, Node 17
+   | Total flight time: 86.1 phut
+   | Timeline:
+   |   - Drone roi depot:      126.0 phut
+   |   [Customer 33]
+   |     - Drone den:         138.5 phut
+   |     - Xe den:            181.3 phut
+   |     - Bat dau resupply:  181.3 phut
+   |     - Ket thuc:          189.3 phut
+   |   [Customer 77]
+   |     - Drone den:         192.0 phut
+   |     - Xe den:            178.0 phut
+   |     - Bat dau resupply:  192.0 phut
+   |     - Ket thuc:          200.0 phut
+   |   [Customer 17]
+   |     - Drone den:         205.3 phut
+   |     - Xe den:            183.7 phut
+   |     - Bat dau resupply:  205.3 phut
+   |     - Ket thuc:          213.3 phut
+   |   - Drone ve depot:       221.1 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #6 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 1
+   | So khach hang: 2 customers
+   | Customers: Node 9, Node 50
+   | Total flight time: 61.1 phut
+   | Timeline:
+   |   - Drone roi depot:      194.1 phut
+   |   [Customer 9]
+   |     - Drone den:         204.0 phut
+   |     - Xe den:            229.8 phut
+   |     - Bat dau resupply:  229.8 phut
+   |     - Ket thuc:          237.8 phut
+   |   [Customer 50]
+   |     - Drone den:         245.9 phut
+   |     - Xe den:            216.7 phut
+   |     - Bat dau resupply:  245.9 phut
+   |     - Ket thuc:          253.9 phut
+   |   - Drone ve depot:       261.2 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #7 ----------------------------------
+   | Drone: Drone 1 | Xe: Xe 0
+   | So khach hang: 1 customers
+   | Customers: Node 32
+   | Total flight time: 52.4 phut
+   | Timeline:
+   |   - Drone roi depot:      226.1 phut
+   |   [Customer 32]
+   |     - Drone den:         230.5 phut
+   |     - Xe den:            269.1 phut
+   |     - Bat dau resupply:  269.1 phut
+   |     - Ket thuc:          277.1 phut
+   |   - Drone ve depot:       281.5 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #8 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 0
+   | So khach hang: 1 customers
+   | Customers: Node 97
+   | Total flight time: 43.2 phut
+   | Timeline:
+   |   - Drone roi depot:      266.2 phut
+   |   [Customer 97]
+   |     - Drone den:         272.0 phut
+   |     - Xe den:            298.5 phut
+   |     - Bat dau resupply:  298.5 phut
+   |     - Ket thuc:          306.5 phut
+   |   - Drone ve depot:       312.4 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #9 ----------------------------------
+   | Drone: Drone 1 | Xe: Xe 0
+   | So khach hang: 3 customers
+   | Customers: Node 29, Node 91, Node 4
+   | Total flight time: 51.1 phut
+   | Timeline:
+   |   - Drone roi depot:      286.5 phut
+   |   [Customer 29]
+   |     - Drone den:         294.0 phut
+   |     - Xe den:            311.5 phut
+   |     - Bat dau resupply:  311.5 phut
+   |     - Ket thuc:          319.5 phut
+   |   [Customer 91]
+   |     - Drone den:         320.4 phut
+   |     - Xe den:            313.0 phut
+   |     - Bat dau resupply:  320.4 phut
+   |     - Ket thuc:          328.4 phut
+   |   [Customer 4]
+   |     - Drone den:         334.8 phut
+   |     - Xe den:            318.4 phut
+   |     - Bat dau resupply:  334.8 phut
+   |     - Ket thuc:          342.8 phut
+   |   - Drone ve depot:       346.6 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #10 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 1
+   | So khach hang: 1 customers
+   | Customers: Node 65
+   | Total flight time: 53.8 phut
+   | Timeline:
+   |   - Drone roi depot:      317.4 phut
+   |   [Customer 65]
+   |     - Drone den:         320.7 phut
+   |     - Xe den:            362.8 phut
+   |     - Bat dau resupply:  362.8 phut
+   |     - Ket thuc:          370.8 phut
+   |   - Drone ve depot:       374.1 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #11 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 0
+   | So khach hang: 3 customers
+   | Customers: Node 89, Node 41, Node 13
+   | Total flight time: 79.9 phut
+   | Timeline:
+   |   - Drone roi depot:      379.1 phut
+   |   [Customer 89]
+   |     - Drone den:         388.1 phut
+   |     - Xe den:            425.0 phut
+   |     - Bat dau resupply:  425.0 phut
+   |     - Ket thuc:          433.0 phut
+   |   [Customer 41]
+   |     - Drone den:         436.7 phut
+   |     - Xe den:            422.1 phut
+   |     - Bat dau resupply:  436.7 phut
+   |     - Ket thuc:          444.7 phut
+   |   [Customer 13]
+   |     - Drone den:         450.2 phut
+   |     - Xe den:            432.5 phut
+   |     - Bat dau resupply:  450.2 phut
+   |     - Ket thuc:          458.2 phut
+   |   - Drone ve depot:       468.1 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #12 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 1
+   | So khach hang: 2 customers
+   | Customers: Node 7, Node 96
+   | Total flight time: 31.4 phut
+   | Timeline:
+   |   - Drone roi depot:      473.1 phut
+   |   [Customer 7]
+   |     - Drone den:         478.9 phut
+   |     - Xe den:            488.6 phut
+   |     - Bat dau resupply:  488.6 phut
+   |     - Ket thuc:          496.6 phut
+   |   [Customer 96]
+   |     - Drone den:         500.1 phut
+   |     - Xe den:            488.9 phut
+   |     - Bat dau resupply:  500.1 phut
+   |     - Ket thuc:          508.1 phut
+   |   - Drone ve depot:       510.4 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #13 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 1
+   | So khach hang: 2 customers
+   | Customers: Node 53, Node 55
+   | Total flight time: 59.5 phut
+   | Timeline:
+   |   - Drone roi depot:      515.4 phut
+   |   [Customer 53]
+   |     - Drone den:         526.4 phut
+   |     - Xe den:            552.2 phut
+   |     - Bat dau resupply:  552.2 phut
+   |     - Ket thuc:          560.2 phut
+   |   [Customer 55]
+   |     - Drone den:         563.6 phut
+   |     - Xe den:            546.1 phut
+   |     - Bat dau resupply:  563.6 phut
+   |     - Ket thuc:          571.6 phut
+   |   - Drone ve depot:       580.9 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #14 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 1
+   | So khach hang: 2 customers
+   | Customers: Node 18, Node 23
+   | Total flight time: 49.3 phut
+   | Timeline:
+   |   - Drone roi depot:      585.9 phut
+   |   [Customer 18]
+   |     - Drone den:         598.4 phut
+   |     - Xe den:            606.0 phut
+   |     - Bat dau resupply:  606.0 phut
+   |     - Ket thuc:          614.0 phut
+   |   [Customer 23]
+   |     - Drone den:         623.8 phut
+   |     - Xe den:            626.1 phut
+   |     - Bat dau resupply:  626.1 phut
+   |     - Ket thuc:          634.1 phut
+   |   - Drone ve depot:       641.2 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #15 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 1
+   | So khach hang: 1 customers
+   | Customers: Node 90
+   | Total flight time: 28.5 phut
+   | Timeline:
+   |   - Drone roi depot:      646.2 phut
+   |   [Customer 90]
+   |     - Drone den:         648.5 phut
+   |     - Xe den:            667.4 phut
+   |     - Bat dau resupply:  667.4 phut
+   |     - Ket thuc:          675.4 phut
+   |   - Drone ve depot:       677.7 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #16 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 0
+   | So khach hang: 2 customers
+   | Customers: Node 93, Node 12
+   | Total flight time: 35.7 phut
+   | Timeline:
+   |   - Drone roi depot:      682.7 phut
+   |   [Customer 93]
+   |     - Drone den:         691.0 phut
+   |     - Xe den:            693.2 phut
+   |     - Bat dau resupply:  693.2 phut
+   |     - Ket thuc:          701.2 phut
+   |   [Customer 12]
+   |     - Drone den:         705.3 phut
+   |     - Xe den:            703.9 phut
+   |     - Bat dau resupply:  705.3 phut
+   |     - Ket thuc:          713.3 phut
+   |   - Drone ve depot:       724.4 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #17 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 1
+   | So khach hang: 3 customers
+   | Customers: Node 25, Node 87, Node 83
+   | Total flight time: 58.1 phut
+   | Timeline:
+   |   - Drone roi depot:      729.4 phut
+   |   [Customer 25]
+   |     - Drone den:         739.4 phut
+   |     - Xe den:            757.3 phut
+   |     - Bat dau resupply:  757.3 phut
+   |     - Ket thuc:          765.3 phut
+   |   [Customer 87]
+   |     - Drone den:         769.3 phut
+   |     - Xe den:            762.6 phut
+   |     - Bat dau resupply:  769.3 phut
+   |     - Ket thuc:          777.3 phut
+   |   [Customer 83]
+   |     - Drone den:         783.7 phut
+   |     - Xe den:            774.9 phut
+   |     - Bat dau resupply:  783.7 phut
+   |     - Ket thuc:          791.7 phut
+   |   - Drone ve depot:       796.5 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #18 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 0
+   | So khach hang: 2 customers
+   | Customers: Node 2, Node 98
+   | Total flight time: 39.8 phut
+   | Timeline:
+   |   - Drone roi depot:      801.5 phut
+   |   [Customer 2]
+   |     - Drone den:         811.4 phut
+   |     - Xe den:            818.1 phut
+   |     - Bat dau resupply:  818.1 phut
+   |     - Ket thuc:          826.1 phut
+   |   [Customer 98]
+   |     - Drone den:         835.8 phut
+   |     - Xe den:            833.6 phut
+   |     - Bat dau resupply:  835.8 phut
+   |     - Ket thuc:          843.8 phut
+   |   - Drone ve depot:       847.4 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #19 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 1
+   | So khach hang: 1 customers
+   | Customers: Node 39
+   | Total flight time: 30.8 phut
+   | Timeline:
+   |   - Drone roi depot:      852.4 phut
+   |   [Customer 39]
+   |     - Drone den:         860.6 phut
+   |     - Xe den:            869.9 phut
+   |     - Bat dau resupply:  869.9 phut
+   |     - Ket thuc:          877.9 phut
+   |   - Drone ve depot:       886.1 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #20 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 0
+   | So khach hang: 2 customers
+   | Customers: Node 69, Node 51
+   | Total flight time: 32.9 phut
+   | Timeline:
+   |   - Drone roi depot:      891.1 phut
+   |   [Customer 69]
+   |     - Drone den:         900.3 phut
+   |     - Xe den:            898.1 phut
+   |     - Bat dau resupply:  900.3 phut
+   |     - Ket thuc:          908.3 phut
+   |   [Customer 51]
+   |     - Drone den:         916.3 phut
+   |     - Xe den:            918.9 phut
+   |     - Bat dau resupply:  918.9 phut
+   |     - Ket thuc:          926.9 phut
+   |   - Drone ve depot:       930.0 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #21 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 1
+   | So khach hang: 2 customers
+   | Customers: Node 57, Node 21
+   | Total flight time: 27.9 phut
+   | Timeline:
+   |   - Drone roi depot:      935.0 phut
+   |   [Customer 57]
+   |     - Drone den:         943.5 phut
+   |     - Xe den:            933.3 phut
+   |     - Bat dau resupply:  943.5 phut
+   |     - Ket thuc:          951.5 phut
+   |   [Customer 21]
+   |     - Drone den:         953.4 phut
+   |     - Xe den:            927.8 phut
+   |     - Bat dau resupply:  953.4 phut
+   |     - Ket thuc:          961.4 phut
+   |   - Drone ve depot:       968.8 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #22 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 0
+   | So khach hang: 1 customers
+   | Customers: Node 61
+   | Total flight time: 25.9 phut
+   | Timeline:
+   |   - Drone roi depot:      973.8 phut
+   |   [Customer 61]
+   |     - Drone den:         984.3 phut
+   |     - Xe den:            969.7 phut
+   |     - Bat dau resupply:  984.3 phut
+   |     - Ket thuc:          992.3 phut
+   |   - Drone ve depot:      1002.7 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #23 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 0
+   | So khach hang: 2 customers
+   | Customers: Node 42, Node 68
+   | Total flight time: 34.4 phut
+   | Timeline:
+   |   - Drone roi depot:     1007.7 phut
+   |   [Customer 42]
+   |     - Drone den:        1019.0 phut
+   |     - Xe den:           1011.1 phut
+   |     - Bat dau resupply: 1019.0 phut
+   |     - Ket thuc:         1027.0 phut
+   |   [Customer 68]
+   |     - Drone den:        1030.5 phut
+   |     - Xe den:           1017.6 phut
+   |     - Bat dau resupply: 1030.5 phut
+   |     - Ket thuc:         1038.5 phut
+   |   - Drone ve depot:      1048.1 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #24 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 1
+   | So khach hang: 3 customers
+   | Customers: Node 10, Node 78, Node 58
+   | Total flight time: 43.2 phut
+   | Timeline:
+   |   - Drone roi depot:     1053.1 phut
+   |   [Customer 10]
+   |     - Drone den:        1063.0 phut
+   |     - Xe den:           1061.1 phut
+   |     - Bat dau resupply: 1063.0 phut
+   |     - Ket thuc:         1071.0 phut
+   |   [Customer 78]
+   |     - Drone den:        1078.6 phut
+   |     - Xe den:           1075.2 phut
+   |     - Bat dau resupply: 1078.6 phut
+   |     - Ket thuc:         1086.6 phut
+   |   [Customer 58]
+   |     - Drone den:        1091.5 phut
+   |     - Xe den:           1071.8 phut
+   |     - Bat dau resupply: 1091.5 phut
+   |     - Ket thuc:         1099.5 phut
+   |   - Drone ve depot:      1105.3 phut
+   +-----------------------------------------------------
+
+   +-- Resupply Trip #25 ----------------------------------
+   | Drone: Drone 0 | Xe: Xe 0
+   | So khach hang: 2 customers
+   | Customers: Node 36, Node 56
+   | Total flight time: 33.9 phut
+   | Timeline:
+   |   - Drone roi depot:     1110.3 phut
+   |   [Customer 36]
+   |     - Drone den:        1121.7 phut
+   |     - Xe den:           1122.8 phut
+   |     - Bat dau resupply: 1122.8 phut
+   |     - Ket thuc:         1130.8 phut
+   |   [Customer 56]
+   |     - Drone den:        1134.7 phut
+   |     - Xe den:           1120.7 phut
+   |     - Bat dau resupply: 1134.7 phut
+   |     - Ket thuc:         1142.7 phut
+   |   - Drone ve depot:      1150.2 phut
+   +-----------------------------------------------------
+
+ THOI GIAN HOAN THANH CAC DRONE:
+   Drone 0: 1150.20 phut
+   Drone 1: 346.64 phut
+
+=============================================================
+
+=========================================
+SUMMARY:
+  Cost before Local Search: 1165.62 minutes
+  Cost after Local Search: 1165.62 minutes
+  Total Penalty: 0.00
+  Feasible: YES
+  Resupply Events: 25
+=========================================
