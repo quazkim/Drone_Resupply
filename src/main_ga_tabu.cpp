@@ -8,6 +8,7 @@
 #include "pdp_tabu.h"
 #include "pdp_fitness.h"
 #include "pdp_localsearch.h"
+#include "pdp_validation.h"
 
 using namespace std;
 
@@ -57,13 +58,13 @@ int main(int argc, char* argv[]) {
     
     double costBeforeLS = solution.totalCost;
     
-    // Apply Solution-based Local Search
-    cout << "\n+========================================================+" << endl;
-    cout << "|     LONGEST ROUTE LOCAL SEARCH (Optimized)          |" << endl;
-    cout << "+========================================================+" << endl;
+    // Recalculate actual C_max using LocalSearch helper
+    IntegratedLocalSearch ils(data, 100);
     
-    IntegratedLocalSearch ils(data, 500);  // 500 iterations max
-    solution = ils.runLongestRoute(solution);  // Use longest route optimization
+    cout << "\n+========================================================+" << endl;
+    cout << "|               GA + TABU RESULT                       |" << endl;
+    cout << "+========================================================+" << endl;
+    cout << "Final cost: " << fixed << setprecision(2) << costBeforeLS << " min" << endl;
     
     double costAfterLS = solution.totalCost;
     
@@ -73,18 +74,13 @@ int main(int argc, char* argv[]) {
     cout << "+========================================================+" << endl;
     printSolution(solution, data);
     
-    cout << "\n=========================================" << endl;
-    cout << "SUMMARY:" << endl;
-    cout << "  Cost before Local Search: " << fixed << setprecision(2) << costBeforeLS << " minutes" << endl;
-    cout << "  Cost after Local Search: " << fixed << setprecision(2) << costAfterLS << " minutes" << endl;
-    if (costAfterLS < costBeforeLS) {
-        cout << "  Improvement by LS: " << (costBeforeLS - costAfterLS) << " minutes ("
-             << fixed << setprecision(1) << ((costBeforeLS - costAfterLS) / costBeforeLS * 100) << "%)" << endl;
-    }
-    cout << "  Total Penalty: " << solution.totalPenalty << endl;
-    cout << "  Feasible: " << (solution.isFeasible ? "YES" : "NO") << endl;
-    cout << "  Resupply Events: " << solution.resupply_events.size() << endl;
-    cout << "=========================================" << endl;
+    // ========== VALIDATION ==========
+    validateSolution(solution, data, true);
+    
+    // ========== COST SUMMARY ==========
+    cout << "\n=========================================\n";
+    cout << "Cost before Local Search: " << fixed << setprecision(2) << costBeforeLS << " minutes\n";
+    cout << "=========================================\n";
 
     return 0;
 }

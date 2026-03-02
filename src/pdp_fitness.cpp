@@ -769,20 +769,24 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
                 // ONE RENDEZVOUS MODEL:
                 // 1. Truck den resupply point (customer dau tien)
                 // 2. Nhan TAT CA packages tu drone tai do
-                // 3. Truck tu di giao cho tung customer
+                // 3. Truck giao hang cho resupply_point (vi no cung la khach hang)
+                // 4. Truck tu di giao cho cac customers con lai
                 
                 int resupply_point = best_event.resupply_point;
                 
-                // Truck den resupply point
+                // Truck den resupply point, nhan hang tu drone, ROI GIAO HANG cho resupply_point
+                // departure = resupply_end + service_time (vi resupply_point cung can duoc giao hang)
+                double departure_from_resupply = best_event.resupply_end_time + data.truckServiceTime;
+                
                 truck.route.push_back(resupply_point);
                 truck.arrival_times.push_back(best_event.truck_arrive_time);
-                truck.departure_times.push_back(best_event.resupply_end_time);
+                truck.departure_times.push_back(departure_from_resupply);
                 truck.current_position = resupply_point;
-                truck.available_time = best_event.resupply_end_time;
+                truck.available_time = departure_from_resupply;
                 
-                // Truck di giao cho cac customers trong batch
+                // Truck di giao cho cac customers CON LAI trong batch (ngoai resupply_point da giao o tren)
                 for (int cust_id : best_consolidation) {
-                    if (cust_id == resupply_point) continue; // Da o day roi
+                    if (cust_id == resupply_point) continue; // Da giao hang o tren roi
                     
                     // Truck di den customer
                     double travel = getTruckDistance(data, truck.current_position, cust_id) / data.truckSpeed * 60.0;
@@ -807,19 +811,20 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
                 C_max = max(C_max, best_event.drone_return_time);
                 C_max = max(C_max, truck.available_time);
                 
-                // Skip c├íc customers ─æ├ú ─æ╞░ß╗úc xß╗¡ l├╜ trong consolidation
+                // Skip cac customers da duoc xu ly trong consolidation
                 set<int> processed_set(best_consolidation.begin(), best_consolidation.end());
                 while (seq_idx + 1 < seq.size()) {
                     int next_cust = seq[seq_idx + 1];
-                    if (processed_set.count(next_cust) && next_cust != v_id) {
-                        seq_idx++; // Skip customer n├áy
+                    // Skip BAT KY customer nao da duoc xu ly (bao gom ca v_id)
+                    if (processed_set.count(next_cust)) {
+                        seq_idx++; // Skip customer nay
                     } else {
                         break;
                     }
                 }
             } else {
-                // DJ2: Truck vß╗ü depot
-                // Chß╗ë th├¬m depot v├áo route nß║┐u xe KH├öNG ß╗ƒ depot
+                // DJ2: Truck về depot
+                // Chỉ thêm depot vào route nếu xe KHÔNG ở depot
                 if (truck.current_position != data.depotIndex) {
                     double t_to_depot = getTruckDistance(data, truck.current_position, data.depotIndex) / data.truckSpeed * 60.0;
                     double T_Arr_Depot = truck.available_time + t_to_depot;
@@ -830,18 +835,28 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
                     
                     truck.available_time = T_Arr_Depot + data.depotReceiveTime;
                     truck.current_position = data.depotIndex;
-                    truck.current_load = 0.0; // Reset load khi vß╗ü depot
-                    truck.cargo_on_truck.clear(); // X├│a tß║Ñt cß║ú h├áng tr├¬n xe
+                    truck.current_load = 0.0; // Reset load khi về depot
+                    truck.cargo_on_truck.clear(); // Xóa tất cả hàng trên xe
                 }
                 
-                // ─Éß╗úi ready time cß╗ºa kh├ích h├áng nß║┐u cß║ºn
-                truck.available_time = max(truck.available_time, (double)v_ready);
+                // Đợi ready time của khách hàng nếu cần
+                // IMPORTANT: Xe chỉ có thể rời depot SAU KHI hàng đã sẵn sàng (ready_time)
+                double T_Depart_Depot = max(truck.available_time, (double)v_ready);
                 
-                // Lß║Ñy h├áng tß╗½ depot (─æ├ú sß║╡n s├áng tß║íi depot)
+                // Cập nhật departure_time của depot hiện tại
+                // Nếu xe đang ở depot ban đầu (route chỉ có 1 node), cập nhật departure_times[0]
+                // Nếu xe vừa quay về depot (route có nhiều node), cập nhật departure_times cuối
+                if (truck.route.size() >= 1 && truck.route.back() == data.depotIndex) {
+                    truck.departure_times.back() = T_Depart_Depot;
+                }
+                
+                truck.available_time = T_Depart_Depot;
+                
+                // Lấy hàng từ depot (đã sẵn sàng tại depot)
                 truck.current_load += v_demand;
-                truck.cargo_on_truck.insert(v_id); // H├áng ─æ╞░ß╗úc lß║Ñy tß╗½ depot
+                truck.cargo_on_truck.insert(v_id); // Hàng được lấy từ depot
                 
-                // ─Éi ─æß║┐n kh├ích h├áng
+                // Đi đến khách hàng
                 double t_to_customer = getTruckDistance(data, data.depotIndex, v_id) / data.truckSpeed * 60.0;
                 double T_Arr_Customer = truck.available_time + t_to_customer;
                 double T_Start = max(T_Arr_Customer, e_v);
@@ -915,12 +930,23 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
                 best_strategy = "batch";
             }
             
-            // Thß╗▒c hiß╗çn ph╞░╞íng ├ín tß╗æt nhß║Ñt
+            // Thực hiện phương án tốt nhất
             if (best_strategy == "batch") {
-                // Thß╗▒c hiß╗çn BATCH (Ph╞░╞íng ├ín B)
+                // Thực hiện BATCH (Phương án B)
                 set<int> processed_customers;
                 
                 for (int batch_customer : batch_customers) {
+                    // Nếu xe ở depot và cần đợi ready_time, cập nhật departure_time của depot
+                    if (truck.current_position == data.depotIndex && 
+                        truck.route.size() >= 1 && 
+                        truck.route.back() == data.depotIndex) {
+                        double ready_time = (double)data.readyTimes[batch_customer];
+                        if (ready_time > truck.available_time) {
+                            truck.available_time = ready_time;
+                            truck.departure_times.back() = ready_time;
+                        }
+                    }
+                    
                     double T_Arr = truck.available_time + getTruckDistance(data, truck.current_position, batch_customer) / data.truckSpeed * 60.0;
                     double T_Start = max(T_Arr, (double)data.readyTimes[batch_customer]);
                     truck.available_time = T_Start + data.truckServiceTime;
@@ -929,10 +955,10 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
                     truck.arrival_times.push_back(T_Arr);
                     truck.departure_times.push_back(truck.available_time);
 
-                    // Cß║¡p nhß║¡t load
+                    // Cập nhật load
                     truck.current_load += data.demands[batch_customer];
                     
-                    // Nß║┐u l├á pickup, ─æ├ính dß║Ñu ─æ├ú pickup cß║╖p n├áy v├á th├¬m h├áng v├áo xe
+                    // Nếu là pickup, đánh dấu đã pickup cặp này và thêm hàng vào xe
                     if (data.nodeTypes[batch_customer] == "P" && data.pairIds[batch_customer] > 0) {
                         truck.picked_up_pairs.insert(data.pairIds[batch_customer]);
                         truck.cargo_on_truck.insert(batch_customer); // H├áng ─æ╞░ß╗úc lß║Ñy l├¬n xe
@@ -956,7 +982,17 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
                 }
                 
             } else {
-                // Thß╗▒c hiß╗çn IMMEDIATE (ph╞░╞íng ├ín A)
+                // Thực hiện IMMEDIATE (phương án A)
+                
+                // Nếu xe ở depot và cần đợi ready_time, cập nhật departure_time của depot
+                if (truck.current_position == data.depotIndex && 
+                    truck.route.size() >= 1 && 
+                    truck.route.back() == data.depotIndex &&
+                    e_v > truck.available_time) {
+                    truck.available_time = e_v;
+                    truck.departure_times.back() = e_v;
+                }
+                
                 double T_Arr = truck.available_time + getTruckDistance(data, truck.current_position, v_id) / data.truckSpeed * 60.0;
                 double T_Start = max(T_Arr, e_v);
                 truck.available_time = T_Start + data.truckServiceTime;
@@ -965,20 +1001,20 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
                 truck.arrival_times.push_back(T_Arr);
                 truck.departure_times.push_back(truck.available_time);
 
-                // Cß║¡p nhß║¡t load
+                // Cập nhật load
                 if (v_type == "P") {
                     truck.current_load += v_demand;
-                    truck.cargo_on_truck.insert(v_id); // H├áng ─æ╞░ß╗úc lß║Ñy l├¬n xe (ch╞░a giao)
-                    // ─É├ính dß║Ñu ─æ├ú pickup cß║╖p n├áy
+                    truck.cargo_on_truck.insert(v_id); // Hàng được lấy lên xe (chưa giao)
+                    // Đánh dấu đã pickup cặp này
                     if (data.pairIds[v_id] > 0) {
                         truck.picked_up_pairs.insert(data.pairIds[v_id]);
                     }
                 } else if (v_type == "DL") {
-                    truck.current_load += v_demand; // demand ├óm -> giß║úm load
-                    // Kh├┤ng cß║ºn x├│a cargo_on_truck v├¼ DL kh├┤ng phß║úi l├á h├áng tr├¬n xe
+                    truck.current_load += v_demand; // demand âm -> giảm load
+                    // Không cần xóa cargo_on_truck vì DL không phải là hàng trên xe
                 }
                 
-                // Kiß╗âm tra capacity
+                // Kiểm tra capacity
                 if (truck.current_load > data.truckCapacity) sol.totalPenalty += 1000;
                 if (truck.current_load < 0) sol.totalPenalty += 1000;
             }
@@ -1125,7 +1161,68 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
     }
     
     // ========== END MERGE STRATEGIES ==========
-        // Tß║Ñt cß║ú xe vß╗ü depot
+    
+    // ========== PROPAGATE DELAY: Truck phải đợi drone tại resupply point ==========
+    // Đây là bước QUAN TRỌNG để tính đúng C_max
+    // Khi drone đến sau truck tại resupply point, truck phải đợi
+    // Delay này cần được propagate đến tất cả nodes tiếp theo trong route
+    
+    for (auto& event : sol.resupply_events) {
+        if (event.customer_ids.empty()) continue;
+        
+        int truck_id = event.truck_id;
+        if (truck_id < 0 || truck_id >= (int)trucks.size()) continue;
+        
+        int resupply_point = event.resupply_point;
+        if (resupply_point <= 0) resupply_point = event.customer_ids[0];
+        
+        auto& truck = trucks[truck_id];
+        
+        // Tìm resupply point trong route của truck
+        for (size_t k = 0; k < truck.route.size(); ++k) {
+            if (truck.route[k] == resupply_point) {
+                // Thời điểm truck có thể rời đi = sau khi resupply xong
+                double required_departure = event.resupply_end_time;
+                
+                // Nếu truck phải đợi drone
+                if (required_departure > truck.departure_times[k]) {
+                    double delay = required_departure - truck.departure_times[k];
+                    truck.departure_times[k] = required_departure;
+                    
+                    // Propagate delay đến tất cả nodes tiếp theo
+                    for (size_t m = k + 1; m < truck.route.size(); ++m) {
+                        truck.arrival_times[m] += delay;
+                        truck.departure_times[m] += delay;
+                    }
+                    
+                    // Cập nhật available_time của truck
+                    truck.available_time = truck.departure_times.back();
+                }
+                break;
+            }
+        }
+    }
+    
+    // ========== END PROPAGATE DELAY ==========
+    
+    // Cập nhật C_max với thời gian hoàn thành thực sự của tất cả resupply events
+    // truck_delivery_end là thời điểm truck giao xong TẤT CẢ hàng sau khi nhận từ drone
+    for (const auto& event : sol.resupply_events) {
+        C_max = max(C_max, event.drone_return_time);
+        C_max = max(C_max, event.truck_delivery_end);
+    }
+    
+    // Cập nhật C_max với truck completion times (sau khi propagate delay)
+    for (int i = 0; i < data.numTrucks; ++i) {
+        C_max = max(C_max, trucks[i].available_time);
+    }
+    
+    // Cập nhật C_max với thời gian hoàn thành của tất cả drones
+    for (int d = 0; d < data.numDrones; ++d) {
+        C_max = max(C_max, sol.drone_completion_times[d]);
+    }
+    
+    // Tất cả xe về depot
     for (int i = 0; i < data.numTrucks; ++i) {
         if (trucks[i].current_position != data.depotIndex) {
             double T_Return_Depot = trucks[i].available_time + 
@@ -1138,7 +1235,7 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
             C_max = max(C_max, T_Return_Depot);
         }
         
-        // L╞░u th├┤ng tin chi tiß║┐t cß╗ºa xe
+        // Lưu thông tin chi tiết của xe
         TruckRouteInfo info;
         info.truck_id = i;
         info.route = trucks[i].route;
@@ -1147,8 +1244,8 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
         info.completion_time = trucks[i].available_time;
         sol.truck_details.push_back(info);
         
-        // L╞░u route v├áo solution (─æß╗â t╞░╞íng th├¡ch)
-        if (trucks[i].route.size() > 2) { // C├│ ├¡t nhß║Ñt depot-customer-depot
+        // Lưu route vào solution (để tương thích)
+        if (trucks[i].route.size() > 2) { // Có ít nhất depot-customer-depot
             sol.routes.push_back(trucks[i].route);
         }
     }

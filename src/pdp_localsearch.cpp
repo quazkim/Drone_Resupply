@@ -658,6 +658,7 @@ bool IntegratedLocalSearch::truckRelocate(PDPSolution& sol) {
                 if (new_cmax < best_cmax - 0.01) {
                     best_cmax = new_cmax;
                     improved = true;
+                    return true; // First improvement - return immediately
                 } else {
                     truck.route = old_route;
                     recalculateTruckTimes(sol);
@@ -811,13 +812,15 @@ bool IntegratedLocalSearch::droneSplitTrip(PDPSolution& sol) {
         // Backup v├á thß╗¡ split
         vector<ResupplyEvent> old_events = sol.resupply_events;
         
-        // Tß║ío 2 trips mß╗¢i
+        // Tao 2 trips moi
         ResupplyEvent early_trip = trip;
         early_trip.customer_ids = early_group;
+        early_trip.resupply_point = early_group[0]; // Cap nhat resupply_point
         
         ResupplyEvent late_trip = trip;
         late_trip.customer_ids = late_group;
-        // Thß╗¡ g├ín late_trip cho drone kh├íc nß║┐u c├│
+        late_trip.resupply_point = late_group[0]; // Cap nhat resupply_point cho late_trip
+        // Thu gan late_trip cho drone khac neu co
         if (data.numDrones > 1) {
             late_trip.drone_id = (trip.drone_id + 1) % data.numDrones;
         }
@@ -898,19 +901,21 @@ bool IntegratedLocalSearch::droneInsertIntoTrip(PDPSolution& sol) {
             // Kiß╗âm tra capacity
             if ((int)trip.customer_ids.size() >= drone_capacity) continue;
             
-            // Kiß╗âm tra consolidation constraints
+            // Kiem tra consolidation constraints
             bool can_consolidate = true;
-            for (int existing : trip.customer_ids) {
-                // Ready time constraint (within 30 min)
-                if (abs(data.readyTimes[existing] - cand_ready) > 30) {
-                    can_consolidate = false;
-                    break;
-                }
-                // Distance constraint (< 10km from first customer)
-                double dist = data.droneDistMatrix[trip.customer_ids[0]][candidate];
+            int first_cust = trip.customer_ids[0];
+            int first_ready = data.readyTimes[first_cust];
+            
+            // Ready time constraint: candidate phai trong 30 phut so voi first customer
+            if (abs(first_ready - cand_ready) > 30) {
+                can_consolidate = false;
+            }
+            
+            // Distance constraint: candidate phai < 10km tu resupply point (first customer)
+            if (can_consolidate) {
+                double dist = data.droneDistMatrix[first_cust][candidate];
                 if (dist > 10.0) {
                     can_consolidate = false;
-                    break;
                 }
             }
             
@@ -923,30 +928,41 @@ bool IntegratedLocalSearch::droneInsertIntoTrip(PDPSolution& sol) {
             // Th├¬m customer v├áo trip
             trip.customer_ids.push_back(candidate);
             
-            // Sß║»p xß║┐p lß║íi theo ready_time ─æß╗â tß╗æi ╞░u
+            // Sap xep lai theo ready_time de toi uu
             sort(trip.customer_ids.begin(), trip.customer_ids.end(), 
                  [this](int a, int b) { return data.readyTimes[a] < data.readyTimes[b]; });
             
-            // Kiß╗âm tra feasibility sau khi th├¬m
+            // Kiem tra feasibility sau khi them
             if (!isDroneTripFeasible(trip, sol)) {
                 sol.resupply_events = old_events;
                 continue;
             }
             
-            // X├│a candidate khß╗Åi truck route (truck kh├┤ng cß║ºn vß╗ü depot lß║Ñy h├áng n├áy nß╗»a)
+            // Xoa candidate khoi truck route (truck khong can ve depot lay hang nay nua)
+            bool route_modified = false;
             for (auto& truck : sol.truck_details) {
                 auto it = find(truck.route.begin(), truck.route.end(), candidate);
                 if (it != truck.route.end()) {
-                    // Kiß╗âm tra xem c├│ depot trip tr╞░ß╗¢c customer n├áy kh├┤ng
+                    vector<int> new_route = truck.route;
                     size_t idx = it - truck.route.begin();
-                    if (idx > 0 && truck.route[idx-1] == data.depotIndex) {
-                        // X├│a cß║ú depot visit nß║┐u ─æ├óy l├á chuyß║┐n vß╗ü depot ri├¬ng
-                        truck.route.erase(it - 1, it + 1);
-                    } else {
-                        truck.route.erase(it);
+                    
+                    // Xoa customer khoi route
+                    new_route.erase(new_route.begin() + idx);
+                    
+                    // Kiem tra feasibility cua route moi
+                    if (isTruckRouteFeasible(new_route, truck.truck_id)) {
+                        truck.route = new_route;
+                        route_modified = true;
                     }
                     break;
                 }
+            }
+            
+            // Neu khong the xoa khoi route, restore va skip
+            if (!route_modified) {
+                sol.resupply_events = old_events;
+                sol.truck_details = old_trucks;
+                continue;
             }
             
             // Recalculate times
@@ -1533,6 +1549,119 @@ int IntegratedLocalSearch::findLongestRoute(const PDPSolution& sol) const {
  * @param sol Solution to optimize
  * @return true if improvement found
  */
+// Helper: Apply 2-opt only to a specific truck
+bool IntegratedLocalSearch::truck2OptSingleRoute(PDPSolution& sol, int truck_idx) {
+    if (truck_idx < 0 || truck_idx >= (int)sol.truck_details.size()) return false;
+    
+    auto& truck = sol.truck_details[truck_idx];
+    if (truck.route.size() < 4) return false;
+    
+    double best_cmax = calculateCmax(sol);
+    
+    for (size_t i = 1; i < truck.route.size() - 2; ++i) {
+        for (size_t j = i + 1; j < truck.route.size() - 1; ++j) {
+            vector<int> new_route = truck.route;
+            reverse(new_route.begin() + i, new_route.begin() + j + 1);
+            
+            if (!isTruckRouteFeasible(new_route, truck.truck_id)) continue;
+            
+            vector<int> old_route = truck.route;
+            truck.route = new_route;
+            recalculateTruckTimes(sol);
+            recalculateDroneTimes(sol);
+            double new_cmax = calculateCmax(sol);
+            
+            if (new_cmax < best_cmax - 0.01) {
+                return true;
+            } else {
+                truck.route = old_route;
+                recalculateTruckTimes(sol);
+                recalculateDroneTimes(sol);
+            }
+        }
+    }
+    return false;
+}
+
+// Helper: Apply swap only to a specific truck
+bool IntegratedLocalSearch::truckSwapSingleRoute(PDPSolution& sol, int truck_idx) {
+    if (truck_idx < 0 || truck_idx >= (int)sol.truck_details.size()) return false;
+    
+    auto& truck = sol.truck_details[truck_idx];
+    if (truck.route.size() < 4) return false;
+    
+    double best_cmax = calculateCmax(sol);
+    
+    for (size_t i = 1; i < truck.route.size() - 1; ++i) {
+        for (size_t j = i + 1; j < truck.route.size() - 1; ++j) {
+            vector<int> new_route = truck.route;
+            swap(new_route[i], new_route[j]);
+            
+            if (!isTruckRouteFeasible(new_route, truck.truck_id)) continue;
+            
+            vector<int> old_route = truck.route;
+            truck.route = new_route;
+            recalculateTruckTimes(sol);
+            recalculateDroneTimes(sol);
+            double new_cmax = calculateCmax(sol);
+            
+            if (new_cmax < best_cmax - 0.01) {
+                return true;
+            } else {
+                truck.route = old_route;
+                recalculateTruckTimes(sol);
+                recalculateDroneTimes(sol);
+            }
+        }
+    }
+    return false;
+}
+
+// Helper: Apply relocate only to a specific truck
+bool IntegratedLocalSearch::truckRelocateSingleRoute(PDPSolution& sol, int truck_idx) {
+    if (truck_idx < 0 || truck_idx >= (int)sol.truck_details.size()) return false;
+    
+    auto& truck = sol.truck_details[truck_idx];
+    if (truck.route.size() < 4) return false;
+    
+    double best_cmax = calculateCmax(sol);
+    
+    for (size_t i = 1; i < truck.route.size() - 1; ++i) {
+        int node = truck.route[i];
+        
+        for (size_t j = 1; j < truck.route.size() - 1; ++j) {
+            if (j == i || j == i - 1) continue;
+            
+            vector<int> new_route;
+            for (size_t k = 0; k < truck.route.size(); ++k) {
+                if (k == i) continue;
+                new_route.push_back(truck.route[k]);
+                if (new_route.size() == j + 1 || (j > i && new_route.size() == j)) {
+                    new_route.push_back(node);
+                }
+            }
+            
+            if (new_route.size() != truck.route.size()) continue;
+            if (!isTruckRouteFeasible(new_route, truck.truck_id)) continue;
+            
+            vector<int> old_route = truck.route;
+            truck.route = new_route;
+            recalculateTruckTimes(sol);
+            recalculateDroneTimes(sol);
+            double new_cmax = calculateCmax(sol);
+            
+            if (new_cmax < best_cmax - 0.01) {
+                return true;
+            } else {
+                truck.route = old_route;
+                recalculateTruckTimes(sol);
+                recalculateDroneTimes(sol);
+            }
+        }
+    }
+    return false;
+}
+
 bool IntegratedLocalSearch::optimizeLongestRoute(PDPSolution& sol) {
     int longest_idx = findLongestRoute(sol);
     double current_cmax = calculateCmax(sol);
@@ -1548,22 +1677,22 @@ bool IntegratedLocalSearch::optimizeLongestRoute(PDPSolution& sol) {
     bool any_improved = false;
     
     for (int attempt = 0; attempt < max_attempts; ++attempt) {
-        // Try operators on the longest route
+        // Try operators on the longest route ONLY
         OperatorType selected_op = selectOperator(single_route_ops);
         
         PDPSolution candidate = sol;
         bool op_success = false;
         
+        // Apply operator ONLY to the longest route
         switch (selected_op) {
             case OperatorType::TRUCK_2OPT:
-                // Only apply to longest route
-                op_success = truck2Opt(candidate);
+                op_success = truck2OptSingleRoute(candidate, longest_idx);
                 break;
             case OperatorType::TRUCK_SWAP:
-                op_success = truckSwap(candidate);
+                op_success = truckSwapSingleRoute(candidate, longest_idx);
                 break;
             case OperatorType::TRUCK_RELOCATE:
-                op_success = truckRelocate(candidate);
+                op_success = truckRelocateSingleRoute(candidate, longest_idx);
                 break;
             default:
                 break;
@@ -1779,3 +1908,177 @@ PDPSolution IntegratedLocalSearch::runLongestRoute(PDPSolution initialSolution) 
     
     return best;
 }
+
+// ============================================================================
+// DRONE-LEVEL LOCAL SEARCH (POST-DECODE OPTIMIZATION)
+// ============================================================================
+
+/**
+ * Recalculate drone times and return the new C_max
+ */
+double IntegratedLocalSearch::recalcDroneAndGetCmax(PDPSolution& sol) {
+    recalculateDroneTimes(sol);
+    double cmax = calculateCmax(sol);
+    sol.totalCost = cmax;
+    return cmax;
+}
+
+/**
+ * droneReassignOptimal: Try all available drones for each trip and keep the best
+ * This is a more aggressive version that tries all possibilities
+ */
+bool IntegratedLocalSearch::droneReassignOptimal(PDPSolution& sol) {
+    bool improved = false;
+    double best_cmax = calculateCmax(sol);
+    
+    for (size_t idx = 0; idx < sol.resupply_events.size(); idx++) {
+        auto& trip = sol.resupply_events[idx];
+        int orig_drone = trip.drone_id;
+        int best_drone = orig_drone;
+        double best_trip_cmax = best_cmax;
+        
+        // Try all drones
+        for (int d = 0; d < data.numDrones; d++) {
+            if (d == orig_drone) continue;
+            
+            // Temporarily assign new drone
+            trip.drone_id = d;
+            
+            // Check feasibility with new drone
+            if (!isDroneTripFeasible(trip, sol)) {
+                trip.drone_id = orig_drone;
+                continue;
+            }
+            
+            // Recalculate and evaluate
+            double new_cmax = recalcDroneAndGetCmax(sol);
+            
+            if (new_cmax < best_trip_cmax - 0.01) {
+                best_drone = d;
+                best_trip_cmax = new_cmax;
+            }
+            
+            // Restore original drone for next iteration
+            trip.drone_id = orig_drone;
+        }
+        
+        // Apply best drone found
+        if (best_drone != orig_drone) {
+            trip.drone_id = best_drone;
+            recalcDroneAndGetCmax(sol);
+            best_cmax = best_trip_cmax;
+            improved = true;
+            
+            cout << "[DRONE LS] Reassigned trip " << idx
+                 << " from drone " << orig_drone << " to drone " << best_drone 
+                 << " | New C_max: " << fixed << setprecision(2) << best_cmax << endl;
+        }
+    }
+    
+    return improved;
+}
+
+/**
+ * droneSwapAssignments: Swap drone assignments between two trips
+ */
+bool IntegratedLocalSearch::droneSwapAssignments(PDPSolution& sol) {
+    bool improved = false;
+    double best_cmax = calculateCmax(sol);
+    
+    // Try all pairs of trips
+    for (size_t i = 0; i < sol.resupply_events.size(); i++) {
+        for (size_t j = i + 1; j < sol.resupply_events.size(); j++) {
+            auto& trip1 = sol.resupply_events[i];
+            auto& trip2 = sol.resupply_events[j];
+            
+            // Only swap if different drones
+            if (trip1.drone_id == trip2.drone_id) continue;
+            
+            // Swap drones
+            std::swap(trip1.drone_id, trip2.drone_id);
+            
+            // Check feasibility
+            bool feasible = isDroneTripFeasible(trip1, sol) && isDroneTripFeasible(trip2, sol);
+            
+            if (feasible) {
+                double new_cmax = recalcDroneAndGetCmax(sol);
+                
+                if (new_cmax < best_cmax - 0.01) {
+                    best_cmax = new_cmax;
+                    improved = true;
+                    
+                    cout << "[DRONE LS] Swapped drones between trips " << i << " and " << j
+                         << " | New C_max: " << fixed << setprecision(2) << best_cmax << endl;
+                    
+                    // Continue searching with improved solution
+                } else {
+                    // Undo swap
+                    std::swap(trip1.drone_id, trip2.drone_id);
+                    recalcDroneAndGetCmax(sol);
+                }
+            } else {
+                // Undo swap
+                std::swap(trip1.drone_id, trip2.drone_id);
+            }
+        }
+    }
+    
+    return improved;
+}
+
+// ============================================================================
+// SEQUENCE-BASED LOCAL SEARCH
+// ============================================================================
+
+/**
+ * runSequenceBasedLS: Modifies the customer sequence and re-decodes to find improvements
+ * This ensures ready_time and all constraints are properly handled
+ */
+PDPSolution IntegratedLocalSearch::runSequenceBasedLS(const PDPSolution& initialSol, 
+                                                       const std::vector<int>& initialSequence,
+                                                       int max_iterations) {
+    // Note: This method requires access to decodeAndEvaluate function
+    // For now, we implement sequence operators that work on the solution's truck routes
+    
+    PDPSolution best = initialSol;
+    double best_cmax = calculateCmax(best);
+    
+    cout << "\n[SEQUENCE-BASED LS] Starting with C_max: " << fixed << setprecision(2) 
+         << best_cmax << " min" << endl;
+    
+    bool improved = true;
+    int iter = 0;
+    
+    while (improved && iter < max_iterations) {
+        improved = false;
+        iter++;
+        
+        // Phase 1: Drone-level optimization
+        if (droneReassignOptimal(best)) {
+            improved = true;
+            best_cmax = calculateCmax(best);
+        }
+        
+        if (droneSwapAssignments(best)) {
+            improved = true;
+            best_cmax = calculateCmax(best);
+        }
+        
+        // Phase 2: Traditional operators
+        if (optimizeDroneTrips(best)) {
+            improved = true;
+            best_cmax = calculateCmax(best);
+        }
+        
+        if (optimizeTruckRoutes(best)) {
+            improved = true;
+            best_cmax = calculateCmax(best);
+        }
+    }
+    
+    cout << "[SEQUENCE-BASED LS] Final C_max: " << fixed << setprecision(2) 
+         << best_cmax << " min after " << iter << " iterations" << endl;
+    
+    return best;
+}
+

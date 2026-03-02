@@ -82,6 +82,18 @@ public:
     // Get operator statistics (for analysis)
     void printOperatorStats() const;
     
+    // ============ DRONE-LEVEL OPTIMIZATION (post-decode) ============
+    // These are PUBLIC so they can be called from main
+    
+    // Reassign drone: Thu tat ca drone cho moi trip, chon tot nhat
+    bool droneReassignOptimal(PDPSolution& sol);
+    
+    // Swap drone assignments: Hoan doi drone assignments giua 2 trips
+    bool droneSwapAssignments(PDPSolution& sol);
+    
+    // Recalculate drone trip time and return C_max
+    double recalcDroneAndGetCmax(PDPSolution& sol);
+    
     // ============ NEW: LONGEST ROUTE OPTIMIZATION ============
     
     // Find the longest truck route (by distance/time)
@@ -156,6 +168,11 @@ private:
     // Cross-exchange: Hoan doi segments giua 2 trucks
     bool truckCrossExchange(PDPSolution& sol);
     
+    // Single-route operators (for longest route optimization)
+    bool truck2OptSingleRoute(PDPSolution& sol, int truck_idx);
+    bool truckSwapSingleRoute(PDPSolution& sol, int truck_idx);
+    bool truckRelocateSingleRoute(PDPSolution& sol, int truck_idx);
+    
     // ============ DRONE LOCAL SEARCH OPERATORS ============
     
     // Merge: Gop 2 drone trips thanh 1 (neu feasible)
@@ -178,6 +195,13 @@ private:
     
     // InsertIntoTrip: Them customer dang duoc phuc vu rieng vao trip co san (NEW)
     bool droneInsertIntoTrip(PDPSolution& sol);
+    
+    // ============ SEQUENCE-BASED LOCAL SEARCH ============
+    
+    // Run sequence-based LS (modifies sequence then decodes)
+    PDPSolution runSequenceBasedLS(const PDPSolution& initialSol, 
+                                   const std::vector<int>& initialSequence,
+                                   int max_iterations = 100);
     
     // ============ MAIN PHASES ============
     
