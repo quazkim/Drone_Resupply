@@ -1,7 +1,7 @@
 CXX = clang++
 CXXFLAGS = -O2 -std=c++17
 SRCDIR = src
-SOURCES = $(SRCDIR)/pdp_reader.cpp $(SRCDIR)/pdp_utils.cpp $(SRCDIR)/pdp_fitness.cpp $(SRCDIR)/pdp_init.cpp $(SRCDIR)/pdp_ga.cpp $(SRCDIR)/pdp_tabu.cpp $(SRCDIR)/pdp_localsearch.cpp $(SRCDIR)/main_ga_tabu.cpp
+SOURCES = $(SRCDIR)/pdp_reader.cpp $(SRCDIR)/pdp_utils.cpp $(SRCDIR)/pdp_fitness.cpp $(SRCDIR)/pdp_init.cpp $(SRCDIR)/pdp_ga.cpp $(SRCDIR)/pdp_tabu.cpp $(SRCDIR)/pdp_localsearch.cpp $(SRCDIR)/pdp_validation.cpp $(SRCDIR)/main_ga_tabu.cpp
 TARGET = main_ga_tabu
 
 .PHONY: all clean
