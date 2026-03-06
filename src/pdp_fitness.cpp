@@ -208,8 +208,10 @@ static pair<double, bool> evaluateDroneTrip(
         truck_pos = cust;
     }
     
-    // Completion time = max(drone return, truck finish delivery)
-    double completion_time = max(drone_return_time, truck_time);
+    // Completion time = truck finish delivery
+    // C_max is defined as: max(time last vehicle returns to depot, time last customer is delivered)
+    // Drone return time does not determine C_max; only truck delivery times matter here.
+    double completion_time = truck_time;
     
     return {completion_time, feasible};
 }
@@ -751,7 +753,9 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
             }
             
             // Lay completion time thuc su cua batch duoc chon
-            double Best_Cost_Resupply = max(best_event.drone_return_time, best_event.truck_delivery_end);
+            // C_max = max(xe cuoi cung ve kho, khach cuoi cung duoc giao)
+            // Drone return time khong anh huong C_max; chi tinh thoi gian truck giao xong
+            double Best_Cost_Resupply = best_event.truck_delivery_end;
 
             // T├¡nh ph╞░╞íng ├ín DJ2: Truck vß╗ü depot
             double t_prev_to_depot = getTruckDistance(data, truck.current_position, data.depotIndex) / data.truckSpeed * 60.0;
@@ -808,7 +812,6 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
                 
                 Drone_Available_Time[best_drone_id] = best_event.drone_return_time;
                 sol.drone_completion_times[best_drone_id] = best_event.drone_return_time;
-                C_max = max(C_max, best_event.drone_return_time);
                 C_max = max(C_max, truck.available_time);
                 
                 // Skip cac customers da duoc xu ly trong consolidation
@@ -1206,20 +1209,15 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
     // ========== END PROPAGATE DELAY ==========
     
     // Cập nhật C_max với thời gian hoàn thành thực sự của tất cả resupply events
-    // truck_delivery_end là thời điểm truck giao xong TẤT CẢ hàng sau khi nhận từ drone
+    // C_max = max(xe cuối cùng về kho, khách cuối cùng được giao)
+    // Drone return time không tính vào C_max; chỉ tính thời gian truck giao hàng xong
     for (const auto& event : sol.resupply_events) {
-        C_max = max(C_max, event.drone_return_time);
         C_max = max(C_max, event.truck_delivery_end);
     }
     
     // Cập nhật C_max với truck completion times (sau khi propagate delay)
     for (int i = 0; i < data.numTrucks; ++i) {
         C_max = max(C_max, trucks[i].available_time);
-    }
-    
-    // Cập nhật C_max với thời gian hoàn thành của tất cả drones
-    for (int d = 0; d < data.numDrones; ++d) {
-        C_max = max(C_max, sol.drone_completion_times[d]);
     }
     
     // Tất cả xe về depot
