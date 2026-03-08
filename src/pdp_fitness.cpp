@@ -7,12 +7,15 @@
 #include <limits>
 #include <cmath>
 #include <set>
+#include <map>
 
 using namespace std;
 
 // ============ CONFIGURATION ============
 static const bool ENABLE_MERGE_STRATEGIES = true;   // Set to false to disable merge
 static const bool ENABLE_CONSOLIDATION = true;      // Allow multiple packages per trip
+static const bool ENABLE_ASSIGNMENT_LS = false;      // Disabled: run only as post-processing
+static const int ASSIGNMENT_LS_MAX_ITER = 50;        // Max iterations for assignment LS
 
 // ============ FORWARD DECLARATIONS ============
 
@@ -427,6 +430,639 @@ static pair<ResupplyEvent, double> tryMergeTrips(
 }
 
 // =========================================================
+// === ASSIGNMENT ENCODING + LOCAL SEARCH ===
+// =========================================================
+
+// AssignmentEncoding struct is defined in pdp_fitness.h
+
+struct DroneTripGroup {
+    int truck_id;
+    int drone_id;  // 0-based
+    vector<int> customer_ids;
+};
+
+// Build drone trips from encoding
+static vector<DroneTripGroup> buildDroneTrips(
+    const vector<int>& seq,
+    const AssignmentEncoding& enc,
+    const PDPData& data
+) {
+    vector<DroneTripGroup> trips;
+    map<pair<int,int>, int> active_trip;  // (truck_id, drone_id) -> trip index
+
+    for (int i = 0; i < (int)seq.size(); i++) {
+        int c = seq[i];
+        if (!data.isCustomer(c)) continue;
+        if (data.nodeTypes[c] != "D" || data.readyTimes[c] <= 0) continue;
+        if (enc.drone_assign[i] == 0) continue;
+
+        int truck_id = enc.truck_assign[i];
+        int drone_id = enc.drone_assign[i] - 1;
+        auto key = make_pair(truck_id, drone_id);
+
+        bool start_new = (enc.break_bit[i] == 1) || !active_trip.count(key);
+
+        if (!start_new) {
+            int tidx = active_trip[key];
+            if ((int)trips[tidx].customer_ids.size() >= data.getDroneCapacity()) {
+                start_new = true;  // capacity exceeded
+            }
+        }
+
+        if (start_new) {
+            DroneTripGroup trip;
+            trip.truck_id = truck_id;
+            trip.drone_id = drone_id;
+            trip.customer_ids.push_back(c);
+            trips.push_back(trip);
+            active_trip[key] = (int)trips.size() - 1;
+        } else {
+            trips[active_trip[key]].customer_ids.push_back(c);
+        }
+    }
+    return trips;
+}
+
+// Decode solution from explicit encoding (truck_assign + drone_assign + break_bit)
+static PDPSolution decodeFromEncoding(
+    const vector<int>& seq,
+    const AssignmentEncoding& enc,
+    const PDPData& data
+) {
+    PDPSolution sol;
+    sol.totalCost = 0.0;
+    sol.totalPenalty = 0.0;
+    sol.isFeasible = true;
+    sol.original_sequence = seq;
+
+    if (seq.empty()) {
+        sol.totalPenalty = 1e9;
+        sol.isFeasible = false;
+        return sol;
+    }
+
+    // Pre-build drone trips
+    auto drone_trips = buildDroneTrips(seq, enc, data);
+
+    // Map customers to trips
+    map<int, int> customer_to_trip;
+    set<int> trip_first_custs;
+    map<int, int> first_cust_to_trip;
+
+    for (int t = 0; t < (int)drone_trips.size(); t++) {
+        for (int c : drone_trips[t].customer_ids)
+            customer_to_trip[c] = t;
+        if (!drone_trips[t].customer_ids.empty()) {
+            int first = drone_trips[t].customer_ids[0];
+            trip_first_custs.insert(first);
+            first_cust_to_trip[first] = t;
+        }
+    }
+
+    // Init trucks
+    double C_max = 0.0;
+    vector<TruckState> trucks(data.numTrucks);
+    for (int i = 0; i < data.numTrucks; i++) {
+        trucks[i].available_time = 0.0;
+        trucks[i].current_position = data.depotIndex;
+        trucks[i].current_load = 0.0;
+        trucks[i].route.push_back(data.depotIndex);
+        trucks[i].arrival_times.push_back(0.0);
+        trucks[i].departure_times.push_back(0.0);
+    }
+
+    vector<double> Drone_Available_Time(data.numDrones, 0.0);
+    sol.drone_completion_times.resize(data.numDrones, 0.0);
+
+    set<int> processed_customers;
+
+    for (int seq_idx = 0; seq_idx < (int)seq.size(); seq_idx++) {
+        int v_id = seq[seq_idx];
+        if (!data.isCustomer(v_id)) continue;
+        if (processed_customers.count(v_id)) continue;
+
+        string v_type = data.nodeTypes[v_id];
+        int v_ready = data.readyTimes[v_id];
+        int v_demand = data.demands[v_id];
+        int v_pairId = data.pairIds[v_id];
+        double e_v = (double)v_ready;
+
+        // ===== DL: FORCED to pickup truck =====
+        if (v_type == "DL" && v_pairId > 0) {
+            int pickup_truck_id = -1;
+            for (int t = 0; t < data.numTrucks; t++) {
+                if (trucks[t].picked_up_pairs.count(v_pairId)) {
+                    pickup_truck_id = t;
+                    break;
+                }
+            }
+            if (pickup_truck_id == -1) {
+                sol.totalPenalty += 10000;
+                sol.isFeasible = false;
+                continue;
+            }
+
+            TruckState& truck = trucks[pickup_truck_id];
+            double T_Arr = truck.available_time +
+                getTruckDistance(data, truck.current_position, v_id) / data.truckSpeed * 60.0;
+            truck.available_time = T_Arr + data.truckServiceTime;
+            truck.current_position = v_id;
+            truck.route.push_back(v_id);
+            truck.arrival_times.push_back(T_Arr);
+            truck.departure_times.push_back(truck.available_time);
+            truck.current_load += v_demand;
+
+            if (truck.current_load < -0.01) { sol.totalPenalty += 1000; sol.isFeasible = false; }
+            if (truck.current_load > data.truckCapacity) { sol.totalPenalty += 1000; sol.isFeasible = false; }
+
+            truck.picked_up_pairs.erase(v_pairId);
+            C_max = max(C_max, truck.available_time);
+            continue;
+        }
+
+        // ===== Get truck from encoding =====
+        int truck_id = enc.truck_assign[seq_idx];
+        if (truck_id < 0 || truck_id >= data.numTrucks) truck_id = 0;
+        TruckState& truck = trucks[truck_id];
+
+        // ===== Type D =====
+        if (v_type == "D" && v_ready > 0) {
+            // Cargo already on truck (from previous depot return)
+            if (truck.cargo_on_truck.count(v_id) > 0) {
+                double T_Arr = truck.available_time +
+                    getTruckDistance(data, truck.current_position, v_id) / data.truckSpeed * 60.0;
+                truck.available_time = T_Arr + data.truckServiceTime;
+                truck.current_position = v_id;
+                truck.route.push_back(v_id);
+                truck.arrival_times.push_back(T_Arr);
+                truck.departure_times.push_back(truck.available_time);
+                truck.current_load -= v_demand;
+                truck.cargo_on_truck.erase(v_id);
+                C_max = max(C_max, truck.available_time);
+                continue;
+            }
+
+            int drone_val = enc.drone_assign[seq_idx];
+
+            if (drone_val > 0 && trip_first_custs.count(v_id)) {
+                // DRONE RESUPPLY: This is the first customer of a trip
+                int tidx = first_cust_to_trip[v_id];
+                auto& trip = drone_trips[tidx];
+                int drone_id = trip.drone_id;
+
+                auto result = evaluateDroneTrip(
+                    trip.customer_ids, drone_id, truck, data, Drone_Available_Time
+                );
+
+                if (result.second) {
+                    // === FEASIBLE: schedule drone resupply ===
+                    ResupplyEvent event;
+                    event.customer_ids = trip.customer_ids;
+                    event.drone_id = drone_id;
+                    event.truck_id = truck_id;
+
+                    double max_ready = 0.0;
+                    for (int cust : trip.customer_ids)
+                        max_ready = max(max_ready, (double)data.readyTimes[cust]);
+
+                    double T_Drone_Ready = max(Drone_Available_Time[drone_id], max_ready);
+                    event.drone_depart_time = T_Drone_Ready + data.depotDroneLoadTime;
+
+                    int resupply_point = trip.customer_ids[0];
+                    event.resupply_point = resupply_point;
+
+                    double t_fly = getDroneDistance(data, data.depotIndex, resupply_point)
+                                   / data.droneSpeed * 60.0;
+                    event.drone_arrive_time = event.drone_depart_time + t_fly;
+
+                    double truck_travel = getTruckDistance(data, truck.current_position, resupply_point)
+                                          / data.truckSpeed * 60.0;
+                    event.truck_arrive_time = truck.available_time + truck_travel;
+
+                    double resupply_start = max(event.drone_arrive_time, event.truck_arrive_time);
+                    double wait = resupply_start - event.drone_arrive_time;
+                    event.resupply_start_time = resupply_start;
+                    event.resupply_end_time = resupply_start + data.resupplyTime;
+
+                    double t_return = getDroneDistance(data, resupply_point, data.depotIndex)
+                                      / data.droneSpeed * 60.0;
+                    event.drone_return_time = event.resupply_end_time + t_return;
+                    event.total_flight_time = t_fly + wait + t_return;
+
+                    // Truck route: go to resupply point, deliver first customer
+                    double departure_from_resupply = event.resupply_end_time + data.truckServiceTime;
+                    truck.route.push_back(resupply_point);
+                    truck.arrival_times.push_back(event.truck_arrive_time);
+                    truck.departure_times.push_back(departure_from_resupply);
+                    truck.current_position = resupply_point;
+                    truck.available_time = departure_from_resupply;
+
+                    // Deliver remaining customers in trip
+                    for (int cust_id : trip.customer_ids) {
+                        if (cust_id == resupply_point) continue;
+                        double travel = getTruckDistance(data, truck.current_position, cust_id)
+                                        / data.truckSpeed * 60.0;
+                        double arrival = truck.available_time + travel;
+                        double departure = arrival + data.truckServiceTime;
+                        truck.route.push_back(cust_id);
+                        truck.arrival_times.push_back(arrival);
+                        truck.departure_times.push_back(departure);
+                        truck.current_position = cust_id;
+                        truck.available_time = departure;
+                    }
+
+                    event.truck_delivery_end = truck.available_time;
+                    sol.resupply_events.push_back(event);
+
+                    Drone_Available_Time[drone_id] = event.drone_return_time;
+                    sol.drone_completion_times[drone_id] =
+                        max(sol.drone_completion_times[drone_id], event.drone_return_time);
+                    C_max = max(C_max, event.drone_return_time);
+                    C_max = max(C_max, truck.available_time);
+
+                    for (int c : trip.customer_ids)
+                        processed_customers.insert(c);
+                    continue;
+                } else {
+                    // Infeasible drone trip -> penalty, fallback to depot return
+                    sol.totalPenalty += 500;
+                }
+            } else if (drone_val > 0 && customer_to_trip.count(v_id)) {
+                // Not first customer of trip -> already processed or will be
+                continue;
+            }
+
+            // DEPOT RETURN (drone_val=0 or drone infeasible)
+            if (truck.current_position != data.depotIndex) {
+                double t_to_depot = getTruckDistance(data, truck.current_position, data.depotIndex)
+                                    / data.truckSpeed * 60.0;
+                double T_Arr_Depot = truck.available_time + t_to_depot;
+                truck.route.push_back(data.depotIndex);
+                truck.arrival_times.push_back(T_Arr_Depot);
+                truck.departure_times.push_back(T_Arr_Depot + data.depotReceiveTime);
+                truck.available_time = T_Arr_Depot + data.depotReceiveTime;
+                truck.current_position = data.depotIndex;
+                truck.current_load = 0.0;
+                truck.cargo_on_truck.clear();
+            }
+
+            double T_Depart = max(truck.available_time, (double)v_ready);
+            if (!truck.route.empty() && truck.route.back() == data.depotIndex)
+                truck.departure_times.back() = T_Depart;
+            truck.available_time = T_Depart;
+
+            truck.current_load += v_demand;
+            truck.cargo_on_truck.insert(v_id);
+
+            double t_to_cust = getTruckDistance(data, data.depotIndex, v_id)
+                               / data.truckSpeed * 60.0;
+            double T_Arr = truck.available_time + t_to_cust;
+            double T_Start = max(T_Arr, e_v);
+            truck.available_time = T_Start + data.truckServiceTime;
+            truck.current_position = v_id;
+            truck.route.push_back(v_id);
+            truck.arrival_times.push_back(T_Arr);
+            truck.departure_times.push_back(truck.available_time);
+            truck.current_load -= v_demand;
+            truck.cargo_on_truck.erase(v_id);
+
+            if (truck.current_load > data.truckCapacity) { sol.totalPenalty += 1000; sol.isFeasible = false; }
+            if (truck.current_load < -0.01) { sol.totalPenalty += 1000; sol.isFeasible = false; }
+        }
+        // ===== Type P =====
+        else if (v_type == "P") {
+            if (truck.current_position == data.depotIndex &&
+                !truck.route.empty() && truck.route.back() == data.depotIndex &&
+                e_v > truck.available_time) {
+                truck.available_time = e_v;
+                truck.departure_times.back() = e_v;
+            }
+
+            double T_Arr = truck.available_time +
+                getTruckDistance(data, truck.current_position, v_id) / data.truckSpeed * 60.0;
+            double T_Start = max(T_Arr, e_v);
+            truck.available_time = T_Start + data.truckServiceTime;
+            truck.current_position = v_id;
+            truck.route.push_back(v_id);
+            truck.arrival_times.push_back(T_Arr);
+            truck.departure_times.push_back(truck.available_time);
+
+            truck.current_load += v_demand;
+            truck.cargo_on_truck.insert(v_id);
+            if (v_pairId > 0) truck.picked_up_pairs.insert(v_pairId);
+
+            if (truck.current_load > data.truckCapacity) { sol.totalPenalty += 1000; sol.isFeasible = false; }
+            if (truck.current_load < 0) { sol.totalPenalty += 1000; sol.isFeasible = false; }
+        }
+
+        C_max = max(C_max, truck.available_time);
+    }
+
+    // ===== PROPAGATE DELAY =====
+    for (auto& event : sol.resupply_events) {
+        if (event.customer_ids.empty()) continue;
+        int tid = event.truck_id;
+        if (tid < 0 || tid >= (int)trucks.size()) continue;
+        int rp = event.resupply_point;
+        if (rp <= 0) rp = event.customer_ids[0];
+        auto& tr = trucks[tid];
+        for (size_t k = 0; k < tr.route.size(); k++) {
+            if (tr.route[k] == rp) {
+                double required = event.resupply_end_time;
+                if (required > tr.departure_times[k]) {
+                    double delay = required - tr.departure_times[k];
+                    tr.departure_times[k] = required;
+                    for (size_t m = k + 1; m < tr.route.size(); m++) {
+                        tr.arrival_times[m] += delay;
+                        tr.departure_times[m] += delay;
+                    }
+                    tr.available_time = tr.departure_times.back();
+                }
+                break;
+            }
+        }
+    }
+
+    // Update C_max
+    for (const auto& event : sol.resupply_events) {
+        C_max = max(C_max, event.drone_return_time);
+        C_max = max(C_max, event.truck_delivery_end);
+    }
+    for (int i = 0; i < data.numTrucks; i++)
+        C_max = max(C_max, trucks[i].available_time);
+    for (int d = 0; d < data.numDrones; d++)
+        C_max = max(C_max, sol.drone_completion_times[d]);
+
+    // Return to depot
+    for (int i = 0; i < data.numTrucks; i++) {
+        if (trucks[i].current_position != data.depotIndex) {
+            double T_Return = trucks[i].available_time +
+                getTruckDistance(data, trucks[i].current_position, data.depotIndex)
+                / data.truckSpeed * 60.0;
+            trucks[i].route.push_back(data.depotIndex);
+            trucks[i].arrival_times.push_back(T_Return);
+            trucks[i].departure_times.push_back(T_Return);
+            trucks[i].available_time = T_Return;
+            C_max = max(C_max, T_Return);
+        }
+        TruckRouteInfo info;
+        info.truck_id = i;
+        info.route = trucks[i].route;
+        info.arrival_times = trucks[i].arrival_times;
+        info.departure_times = trucks[i].departure_times;
+        info.completion_time = trucks[i].available_time;
+        sol.truck_details.push_back(info);
+        if (trucks[i].route.size() > 2)
+            sol.routes.push_back(trucks[i].route);
+    }
+
+    sol.totalCost = C_max;
+    if (sol.totalPenalty > 1.0) sol.isFeasible = false;
+    return sol;
+}
+
+// Extract encoding from a greedy-decoded solution
+AssignmentEncoding initFromSolution(
+    const vector<int>& seq,
+    const PDPSolution& sol,
+    const PDPData& data
+) {
+    int n = (int)seq.size();
+    AssignmentEncoding enc;
+    enc.truck_assign.resize(n, 0);
+    enc.drone_assign.resize(n, 0);
+    enc.break_bit.resize(n, 1);
+
+    // Map customer_id -> truck_id from truck_details
+    map<int, int> cust_truck;
+    for (const auto& td : sol.truck_details)
+        for (int node : td.route)
+            if (data.isCustomer(node))
+                cust_truck[node] = td.truck_id;
+
+    // Map customer_id -> (drone_id+1, event_index) from resupply_events
+    map<int, int> cust_drone;
+    map<int, int> cust_event;
+    for (int e = 0; e < (int)sol.resupply_events.size(); e++)
+        for (int c : sol.resupply_events[e].customer_ids) {
+            cust_drone[c] = sol.resupply_events[e].drone_id + 1;
+            cust_event[c] = e;
+        }
+
+    int prev_event = -1, prev_drone = -1, prev_truck = -1;
+    for (int i = 0; i < n; i++) {
+        int c = seq[i];
+        if (!data.isCustomer(c)) continue;
+
+        if (cust_truck.count(c)) enc.truck_assign[i] = cust_truck[c];
+        if (cust_drone.count(c)) enc.drone_assign[i] = cust_drone[c];
+
+        // Break bit: 0 if same event+drone+truck as previous D customer
+        if (cust_event.count(c)) {
+            int ev = cust_event[c];
+            int dr = enc.drone_assign[i];
+            int tr = enc.truck_assign[i];
+            enc.break_bit[i] = (ev == prev_event && dr == prev_drone && tr == prev_truck) ? 0 : 1;
+            prev_event = ev;
+            prev_drone = dr;
+            prev_truck = tr;
+        }
+    }
+    return enc;
+}
+
+// Assignment-based local search: flip truck_assign, drone_assign, break_bit
+PDPSolution runAssignmentLS(
+    const vector<int>& seq,
+    AssignmentEncoding& enc,
+    const PDPData& data,
+    int max_iter
+) {
+    PDPSolution best_sol = decodeFromEncoding(seq, enc, data);
+    double best_cost = best_sol.totalCost + best_sol.totalPenalty * 1000.0;
+    int n = (int)seq.size();
+
+    // Precompute DL partner indices for P nodes
+    vector<int> dl_partner(n, -1);
+    for (int i = 0; i < n; i++) {
+        int c = seq[i];
+        if (!data.isCustomer(c)) continue;
+        if (data.nodeTypes[c] == "P" && data.pairIds[c] > 0) {
+            int pair_id = data.pairIds[c];
+            for (int j = 0; j < n; j++) {
+                if (j != i && data.isCustomer(seq[j]) &&
+                    data.nodeTypes[seq[j]] == "DL" &&
+                    data.pairIds[seq[j]] == pair_id) {
+                    dl_partner[i] = j;
+                    break;
+                }
+            }
+        }
+    }
+
+    for (int iter = 0; iter < max_iter; iter++) {
+        // Best-improvement: find the best move across all operators
+        double iter_best_cost = best_cost;
+        int best_op = -1, best_i = -1, best_j = -1, best_val = -1;
+        PDPSolution iter_best_sol;
+
+        for (int i = 0; i < n; i++) {
+            int c = seq[i];
+            if (!data.isCustomer(c)) continue;
+            string ctype = data.nodeTypes[c];
+
+            // === OP1: Flip truck assignment (P and D only, skip DL) ===
+            if (ctype != "DL") {
+                int old_truck = enc.truck_assign[i];
+                int di = dl_partner[i];
+                int dl_old = (di >= 0) ? enc.truck_assign[di] : -1;
+
+                for (int t = 0; t < data.numTrucks; t++) {
+                    if (t == old_truck) continue;
+                    enc.truck_assign[i] = t;
+                    if (di >= 0) enc.truck_assign[di] = t;
+
+                    PDPSolution sol = decodeFromEncoding(seq, enc, data);
+                    double cost = sol.totalCost + sol.totalPenalty * 1000.0;
+                    if (cost < iter_best_cost - 0.01) {
+                        iter_best_cost = cost;
+                        iter_best_sol = sol;
+                        best_op = 1; best_i = i; best_val = t;
+                    }
+
+                    enc.truck_assign[i] = old_truck;
+                    if (di >= 0) enc.truck_assign[di] = dl_old;
+                }
+            }
+
+            // === OP2: Flip drone/depot (type D only) ===
+            if (ctype == "D" && data.readyTimes[c] > 0) {
+                int old_drone = enc.drone_assign[i];
+                for (int d = 0; d <= data.numDrones; d++) {
+                    if (d == old_drone) continue;
+                    enc.drone_assign[i] = d;
+
+                    PDPSolution sol = decodeFromEncoding(seq, enc, data);
+                    double cost = sol.totalCost + sol.totalPenalty * 1000.0;
+                    if (cost < iter_best_cost - 0.01) {
+                        iter_best_cost = cost;
+                        iter_best_sol = sol;
+                        best_op = 2; best_i = i; best_val = d;
+                    }
+
+                    enc.drone_assign[i] = old_drone;
+                }
+            }
+
+            // === OP3: Flip break bit (type D with drone > 0) ===
+            if (ctype == "D" && data.readyTimes[c] > 0 && enc.drone_assign[i] > 0) {
+                enc.break_bit[i] = 1 - enc.break_bit[i];
+
+                PDPSolution sol = decodeFromEncoding(seq, enc, data);
+                double cost = sol.totalCost + sol.totalPenalty * 1000.0;
+                if (cost < iter_best_cost - 0.01) {
+                    iter_best_cost = cost;
+                    iter_best_sol = sol;
+                    best_op = 3; best_i = i;
+                }
+
+                enc.break_bit[i] = 1 - enc.break_bit[i];  // revert
+            }
+
+            // === OP4: Swap truck assignment between two customers ===
+            if (ctype != "DL") {
+                for (int j = i + 1; j < n; j++) {
+                    int c2 = seq[j];
+                    if (!data.isCustomer(c2)) continue;
+                    if (data.nodeTypes[c2] == "DL") continue;
+                    if (enc.truck_assign[i] == enc.truck_assign[j]) continue;
+
+                    // Swap trucks
+                    int ti = enc.truck_assign[i], tj = enc.truck_assign[j];
+                    int di = dl_partner[i], dj = dl_partner[j];
+                    int di_old = (di >= 0) ? enc.truck_assign[di] : -1;
+                    int dj_old = (dj >= 0) ? enc.truck_assign[dj] : -1;
+
+                    enc.truck_assign[i] = tj;
+                    enc.truck_assign[j] = ti;
+                    if (di >= 0) enc.truck_assign[di] = tj;
+                    if (dj >= 0) enc.truck_assign[dj] = ti;
+
+                    PDPSolution sol = decodeFromEncoding(seq, enc, data);
+                    double cost = sol.totalCost + sol.totalPenalty * 1000.0;
+                    if (cost < iter_best_cost - 0.01) {
+                        iter_best_cost = cost;
+                        iter_best_sol = sol;
+                        best_op = 4; best_i = i; best_j = j;
+                    }
+
+                    // Revert
+                    enc.truck_assign[i] = ti;
+                    enc.truck_assign[j] = tj;
+                    if (di >= 0) enc.truck_assign[di] = di_old;
+                    if (dj >= 0) enc.truck_assign[dj] = dj_old;
+                }
+            }
+
+            // === OP5: Swap drone assignment between two D customers ===
+            if (ctype == "D" && data.readyTimes[c] > 0) {
+                for (int j = i + 1; j < n; j++) {
+                    int c2 = seq[j];
+                    if (!data.isCustomer(c2)) continue;
+                    if (data.nodeTypes[c2] != "D" || data.readyTimes[c2] <= 0) continue;
+                    if (enc.drone_assign[i] == enc.drone_assign[j]) continue;
+
+                    int di_val = enc.drone_assign[i], dj_val = enc.drone_assign[j];
+                    enc.drone_assign[i] = dj_val;
+                    enc.drone_assign[j] = di_val;
+
+                    PDPSolution sol = decodeFromEncoding(seq, enc, data);
+                    double cost = sol.totalCost + sol.totalPenalty * 1000.0;
+                    if (cost < iter_best_cost - 0.01) {
+                        iter_best_cost = cost;
+                        iter_best_sol = sol;
+                        best_op = 5; best_i = i; best_j = j;
+                    }
+
+                    // Revert
+                    enc.drone_assign[i] = di_val;
+                    enc.drone_assign[j] = dj_val;
+                }
+            }
+        }
+
+        // Apply the best move found
+        if (best_op < 0) break;  // no improving move found
+
+        best_sol = iter_best_sol;
+        best_cost = iter_best_cost;
+
+        if (best_op == 1) {
+            enc.truck_assign[best_i] = best_val;
+            int di = dl_partner[best_i];
+            if (di >= 0) enc.truck_assign[di] = best_val;
+        } else if (best_op == 2) {
+            enc.drone_assign[best_i] = best_val;
+        } else if (best_op == 3) {
+            enc.break_bit[best_i] = 1 - enc.break_bit[best_i];
+        } else if (best_op == 4) {
+            int ti = enc.truck_assign[best_i], tj = enc.truck_assign[best_j];
+            enc.truck_assign[best_i] = tj;
+            enc.truck_assign[best_j] = ti;
+            int di = dl_partner[best_i], dj = dl_partner[best_j];
+            if (di >= 0) enc.truck_assign[di] = tj;
+            if (dj >= 0) enc.truck_assign[dj] = ti;
+        } else if (best_op == 5) {
+            int di_val = enc.drone_assign[best_i], dj_val = enc.drone_assign[best_j];
+            enc.drone_assign[best_i] = dj_val;
+            enc.drone_assign[best_j] = di_val;
+        }
+    }
+
+    return best_sol;
+}
+
+// =========================================================
 // === HAM DANH GIA (FITNESS FUNCTION) ===
 // =========================================================
 
@@ -450,6 +1086,7 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
     }
 
     double C_max = 0.0;
+    
     
     // Khoi tao trang thai cac xe tai (su dung TruckState da dinh nghia o dau file)
     vector<TruckState> trucks(data.numTrucks);
@@ -1250,6 +1887,17 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
 
     sol.totalCost = C_max;
     if (sol.totalPenalty > 1.0) sol.isFeasible = false;
+
+    // ===== ASSIGNMENT LOCAL SEARCH =====
+    if (ENABLE_ASSIGNMENT_LS && !seq.empty()) {
+        AssignmentEncoding enc = initFromSolution(seq, sol, data);
+        PDPSolution ls_sol = runAssignmentLS(seq, enc, data, ASSIGNMENT_LS_MAX_ITER);
+        double ls_cost = ls_sol.totalCost + ls_sol.totalPenalty * 1000.0;
+        double cur_cost = sol.totalCost + sol.totalPenalty * 1000.0;
+        if (ls_cost < cur_cost - 0.01) {
+            sol = ls_sol;
+        }
+    }
 
     return sol;
 }

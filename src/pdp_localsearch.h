@@ -114,6 +114,13 @@ private:
     int truck_improvements = 0;
     int drone_improvements = 0;
     
+    // Simulated Annealing parameters
+    double sa_temperature = 0.0;
+    double sa_cooling_rate = 0.995;
+    double sa_min_temperature = 0.01;
+    bool acceptBySA(double delta);  // Accept worse move with probability e^(-delta/T)
+    void initSATemperature(double initial_cmax);  // Set initial temperature based on objective
+    
     // Adaptive operator selection
     std::map<OperatorType, OperatorStats> operatorStats;
     void initOperatorStats();
@@ -195,6 +202,21 @@ private:
     
     // InsertIntoTrip: Them customer dang duoc phuc vu rieng vao trip co san (NEW)
     bool droneInsertIntoTrip(PDPSolution& sol);
+    
+    // ============ RUIN AND RECREATE ============
+    
+    // Ruin: Remove 30-50% of customers from truck routes
+    struct RuinInfo {
+        std::vector<int> removed_customers;  // Customers removed from routes
+        PDPSolution ruined_solution;         // Solution after removal
+    };
+    RuinInfo ruinSolution(const PDPSolution& sol, double removal_rate);
+    
+    // Recreate: Greedy re-insert removed customers
+    PDPSolution recreateSolution(const RuinInfo& ruin_info);
+    
+    // Greedy insert a single customer into the best position in any truck route
+    bool greedyInsertCustomer(PDPSolution& sol, int customer);
     
     // ============ SEQUENCE-BASED LOCAL SEARCH ============
     

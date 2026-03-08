@@ -1,5 +1,6 @@
 ﻿#include <iostream>
 #include <string>
+#include <sstream>
 #include <iomanip>
 #include "pdp_types.h"
 #include "pdp_reader.h"
@@ -15,13 +16,14 @@ using namespace std;
 int main(int argc, char* argv[]) {
     // Configuration parameters - modify these values directly
     const int POPULATION_SIZE = 200;
-    const int MAX_GENERATIONS = 100;
+    const int MAX_GENERATIONS = 500;
     const double MUTATION_RATE = 0.1;
     const int RUN_NUMBER = 1;
     
     if (argc < 2) {
-        cerr << "Usage: " << argv[0] << " <instance_file>" << endl;
-        cerr << "Example: " << argv[0] << " Instance /U_10_0.5_Num_1_pd.txt" << endl;
+        cerr << "Usage: " << argv[0] << " <instance_file> [--depot x,y]" << endl;
+        cerr << "Example: " << argv[0] << " Instance/U_10_0.5_Num_1.txt" << endl;
+        cerr << "         " << argv[0] << " Instance/U_30_0.5_Num_1.txt --depot -10,10" << endl;
         cerr << "\nCurrent parameters (edit in main_ga_tabu.cpp):" << endl;
         cerr << "  Population Size: " << POPULATION_SIZE << endl;
         cerr << "  Max Generations: " << MAX_GENERATIONS << endl;
@@ -34,6 +36,23 @@ int main(int argc, char* argv[]) {
     int maxGenerations = MAX_GENERATIONS;
     double mutationRate = MUTATION_RATE;
     int runNumber = RUN_NUMBER;
+    
+    // Parse optional --depot x,y argument
+    double customDepotX = 10.0, customDepotY = 10.0;
+    bool hasCustomDepot = false;
+    for (int i = 2; i < argc; i++) {
+        string arg = argv[i];
+        if (arg == "--depot" && i + 1 < argc) {
+            string coords = argv[i + 1];
+            // Replace comma with space for parsing
+            for (char& ch : coords) if (ch == ',') ch = ' ';
+            istringstream css(coords);
+            if (css >> customDepotX >> customDepotY) {
+                hasCustomDepot = true;
+            }
+            i++;
+        }
+    }
 
     cout << "\n+========================================================+" << endl;
     cout << "|     PDP SOLVER - GA + TABU SEARCH                  |" << endl;
@@ -42,6 +61,11 @@ int main(int argc, char* argv[]) {
     // Read instance
     cout << "\nReading instance: " << instanceFile << endl;
     PDPData data;
+    if (hasCustomDepot) {
+        data.depotCenter = {customDepotX, customDepotY};
+        data.useDepotCenter = true;
+        cout << "Using custom depot: (" << customDepotX << ", " << customDepotY << ")" << endl;
+    }
     if (!readPDPFile(instanceFile, data)) {
         cerr << "Error: Failed to read instance file!" << endl;
         return 1;
@@ -52,6 +76,8 @@ int main(int argc, char* argv[]) {
     cout << "  Trucks: " << data.numTrucks << endl;
     cout << "  Drones: " << data.numDrones << endl;
     cout << "  Drone endurance: " << data.droneEndurance << " minutes" << endl;
+    cout << "  Depot: (" << data.coordinates[data.depotIndex].first 
+         << ", " << data.coordinates[data.depotIndex].second << ")" << endl;
     
     // Run GA + Tabu
     PDPSolution solution = geneticAlgorithmPDP(data, populationSize, maxGenerations, mutationRate, runNumber);

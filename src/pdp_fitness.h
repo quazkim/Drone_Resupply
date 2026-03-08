@@ -26,4 +26,34 @@
  */
 PDPSolution decodeAndEvaluate(const std::vector<int>& seq, const PDPData& data);
 
+// Assignment encoding for Local Search post-processing
+struct AssignmentEncoding {
+    std::vector<int> truck_assign;
+    std::vector<int> drone_assign;
+    std::vector<int> break_bit;
+};
+
+AssignmentEncoding initFromSolution(
+    const std::vector<int>& seq,
+    const PDPSolution& sol,
+    const PDPData& data
+);
+
+PDPSolution runAssignmentLS(
+    const std::vector<int>& seq,
+    AssignmentEncoding& enc,
+    const PDPData& data,
+    int max_iter
+);
+
+// Convenience: run assignment LS on a decoded solution
+inline PDPSolution assignmentLSPostProcess(const std::vector<int>& seq, const PDPData& data) {
+    PDPSolution sol = decodeAndEvaluate(seq, data);
+    AssignmentEncoding enc = initFromSolution(seq, sol, data);
+    PDPSolution ls_sol = runAssignmentLS(seq, enc, data, 200);
+    double ls_cost = ls_sol.totalCost + ls_sol.totalPenalty * 1000.0;
+    double cur_cost = sol.totalCost + sol.totalPenalty * 1000.0;
+    return (ls_cost < cur_cost - 0.01) ? ls_sol : sol;
+}
+
 #endif // PDP_FITNESS_H

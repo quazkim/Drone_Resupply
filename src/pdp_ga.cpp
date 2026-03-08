@@ -12,6 +12,7 @@
 #include <limits>
 #include <iomanip>
 #include <climits>
+#include <numeric>
 
 using namespace std;
 
@@ -112,6 +113,67 @@ struct AdaptiveParams {
         return dist(gen);
     }
 };
+
+// ============ PERTURBATION OPERATORS (for Tabu diversification) ============
+
+// Double-bridge perturbation: splits sequence into 4 parts and reassembles
+vector<int> doubleBridgePerturbation(const vector<int>& seq, mt19937& gen) {
+    int n = seq.size();
+    if (n < 8) return seq; // too small
+    
+    uniform_int_distribution<> dist(1, n - 2);
+    vector<int> cuts;
+    set<int> cutSet;
+    while ((int)cuts.size() < 3) {
+        int c = dist(gen);
+        if (cutSet.find(c) == cutSet.end()) {
+            cuts.push_back(c);
+            cutSet.insert(c);
+        }
+    }
+    sort(cuts.begin(), cuts.end());
+    
+    // Split into 4 segments: [0,c1), [c1,c2), [c2,c3), [c3,n)
+    vector<int> result;
+    // Reassemble as: segment0, segment2, segment1, segment3
+    for (int i = 0; i < cuts[0]; i++) result.push_back(seq[i]);
+    for (int i = cuts[1]; i < cuts[2]; i++) result.push_back(seq[i]);
+    for (int i = cuts[0]; i < cuts[1]; i++) result.push_back(seq[i]);
+    for (int i = cuts[2]; i < n; i++) result.push_back(seq[i]);
+    return result;
+}
+
+// Ruin-recreate perturbation: remove k random customers and reinsert at random positions
+vector<int> ruinRecreatePerturbation(const vector<int>& seq, mt19937& gen, double ruinRatio = 0.3) {
+    int n = seq.size();
+    int k = max(2, (int)(n * ruinRatio));
+    
+    // Select k random positions to remove
+    vector<int> indices(n);
+    iota(indices.begin(), indices.end(), 0);
+    shuffle(indices.begin(), indices.end(), gen);
+    
+    set<int> removeSet(indices.begin(), indices.begin() + k);
+    
+    vector<int> removed;
+    vector<int> remaining;
+    for (int i = 0; i < n; i++) {
+        if (removeSet.count(i)) {
+            removed.push_back(seq[i]);
+        } else {
+            remaining.push_back(seq[i]);
+        }
+    }
+    
+    // Reinsert removed customers at random positions
+    shuffle(removed.begin(), removed.end(), gen);
+    for (int cust : removed) {
+        uniform_int_distribution<> posDist(0, (int)remaining.size());
+        int pos = posDist(gen);
+        remaining.insert(remaining.begin() + pos, cust);
+    }
+    return remaining;
+}
 
 // ============ CROSSOVER OPERATORS ============
 
@@ -535,7 +597,8 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
          << bestSolution.totalCost << " (penalty: " << bestSolution.totalPenalty << ")" << endl;
     
     int noImprovementCounter = 0;
-    int tabuThreshold = maxGenerations / 20;
+    int tabuThreshold = maxGenerations / 10;
+    int tabuRounds = 0;
     bool tabuApplied = false;
     int adaptationInterval = max(5, maxGenerations / 20);
     
@@ -611,9 +674,10 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
             offspringFitness[i] = sol.totalCost + sol.totalPenalty;
         }
         
-        // 2.4: Selection - 70% best offspring + 30% best parents
-        int numBestOffspring = (int)(populationSize * 0.7);
-        int numBestParents = populationSize - numBestOffspring;
+        // 2.4: Selection - 50% best offspring + 20% random offspring + 30% best parents
+        int numBestOffspring = (int)(populationSize * 0.5);
+        int numRandomOffspring = (int)(populationSize * 0.2);
+        int numBestParents = populationSize - numBestOffspring - numRandomOffspring;
         
         // Sort offspring
         vector<int> offspringIndices(offspring.size());
@@ -631,11 +695,27 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
         vector<vector<int>> newPopulation;
         vector<double> newFitness;
         
+        // 50% best offspring
         for (int i = 0; i < numBestOffspring; ++i) {
             newPopulation.push_back(offspring[offspringIndices[i]]);
             newFitness.push_back(offspringFitness[offspringIndices[i]]);
         }
         
+        // 20% random offspring (from remaining, not already selected)
+        {
+            vector<int> remainingOffIdx;
+            for (int i = numBestOffspring; i < (int)offspringIndices.size(); ++i) {
+                remainingOffIdx.push_back(offspringIndices[i]);
+            }
+            shuffle(remainingOffIdx.begin(), remainingOffIdx.end(), rng);
+            int toAdd = min(numRandomOffspring, (int)remainingOffIdx.size());
+            for (int i = 0; i < toAdd; ++i) {
+                newPopulation.push_back(offspring[remainingOffIdx[i]]);
+                newFitness.push_back(offspringFitness[remainingOffIdx[i]]);
+            }
+        }
+        
+        // 30% best parents (elitism)
         for (int i = 0; i < numBestParents; ++i) {
             newPopulation.push_back(population[parentIndices[i]]);
             newFitness.push_back(fitness[parentIndices[i]]);
@@ -677,50 +757,214 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
             }
         }
         
-        // 2.5: Apply Tabu Search after 20% generations without improvement
+        // 2.5: Apply Tabu Search to top 5% after stagnation
         if (noImprovementCounter >= tabuThreshold) {
+            int topK = max(1, populationSize / 10); // top 10%
             cout << "\n[TABU] No improvement for " << tabuThreshold 
-                 << " generations. Applying Tabu Search..." << endl;
+                 << " generations. Applying Tabu Search to top " << topK << " individuals..." << endl;
             
-            // Validate bestSequence before Tabu
-            if (bestSequence.size() != data.numCustomers) {
-                cerr << "ERROR: bestSequence size mismatch before Tabu: " 
-                     << bestSequence.size() << " vs " << data.numCustomers << endl;
-                tabuApplied = true;
-                continue;
+            // Sort population indices by fitness (ascending = best first)
+            vector<int> sortedIdx(populationSize);
+            iota(sortedIdx.begin(), sortedIdx.end(), 0);
+            sort(sortedIdx.begin(), sortedIdx.end(), 
+                 [&fitness](int a, int b) { return fitness[a] < fitness[b]; });
+            
+            double bestBeforeTabu = bestSolution.totalCost + bestSolution.totalPenalty;
+            
+            // Also add random individuals (with perturbation) for diversity
+            int numRandom = topK; // same number of random individuals
+            vector<int> randomIdx;
+            {
+                vector<int> nonTopIdx;
+                for (int i = topK; i < populationSize; i++) nonTopIdx.push_back(sortedIdx[i]);
+                shuffle(nonTopIdx.begin(), nonTopIdx.end(), rng);
+                int toTake = min(numRandom, (int)nonTopIdx.size());
+                for (int i = 0; i < toTake; i++) randomIdx.push_back(nonTopIdx[i]);
             }
             
-            // Apply tabu to best sequence
-            try {
-                bestSequence = tabuSearchPDP(bestSequence, data, 50);
-                bestSolution = decodeAndEvaluate(bestSequence, data);
-                
-                // Validate after Tabu
-                if (bestSequence.size() != data.numCustomers) {
-                    cerr << "ERROR: bestSequence corrupted after Tabu: " 
-                         << bestSequence.size() << " vs " << data.numCustomers << endl;
-                    tabuApplied = true;
-                    continue;
+            // Process top individuals + random individuals
+            int totalTabu = topK + (int)randomIdx.size();
+            for (int k = 0; k < totalTabu; ++k) {
+                int idx;
+                bool isRandom = (k >= topK);
+                if (!isRandom) {
+                    idx = sortedIdx[k];
+                } else {
+                    idx = randomIdx[k - topK];
                 }
                 
-                // Replace worst individual with tabu result
-                population[populationSize - 1] = bestSequence;
-                fitness[populationSize - 1] = bestSolution.totalCost + bestSolution.totalPenalty;
+                if (population[idx].size() != data.numCustomers) continue;
                 
-                cout << "[TABU] After Tabu Search: " << fixed << setprecision(2)
-                     << bestSolution.totalCost << " (penalty: " << bestSolution.totalPenalty << ")" << endl;
-            } catch (const exception& e) {
-                cerr << "ERROR in Tabu Search: " << e.what() << endl;
+                try {
+                    // Apply perturbation before Tabu for diversity
+                    vector<int> startSeq = population[idx];
+                    if (isRandom || k > 0) {
+                        // Alternate between double-bridge and ruin-recreate
+                        if (k % 2 == 0) {
+                            startSeq = doubleBridgePerturbation(startSeq, rng);
+                        } else {
+                            startSeq = ruinRecreatePerturbation(startSeq, rng, 0.3);
+                        }
+                        repairSequence(startSeq, data, rng);
+                    }
+                    
+                    vector<int> tabuResult = tabuSearchPDP(startSeq, data, 200);
+                    if (tabuResult.size() != data.numCustomers) continue;
+                    
+                    // Multi-start Assignment LS: try 3 random starts + 1 greedy, pick best
+                    PDPSolution bestTabuSol = assignmentLSPostProcess(tabuResult, data);
+                    double bestTabuFit = bestTabuSol.totalCost + bestTabuSol.totalPenalty;
+                    
+                    for (int ms = 0; ms < 3; ms++) {
+                        // Create random assignment encoding
+                        AssignmentEncoding randEnc;
+                        int seqLen = (int)tabuResult.size();
+                        randEnc.truck_assign.resize(seqLen);
+                        randEnc.drone_assign.resize(seqLen);
+                        randEnc.break_bit.resize(seqLen);
+                        
+                        uniform_int_distribution<> truckDist(0, data.numTrucks - 1);
+                        uniform_int_distribution<> droneDist(0, data.numDrones);
+                        uniform_int_distribution<> bitDist(0, 1);
+                        
+                        for (int j = 0; j < seqLen; j++) {
+                            randEnc.truck_assign[j] = truckDist(rng);
+                            int c = tabuResult[j];
+                            if (data.isCustomer(c) && data.nodeTypes[c] == "D" && data.readyTimes[c] > 0) {
+                                randEnc.drone_assign[j] = droneDist(rng);
+                            } else {
+                                randEnc.drone_assign[j] = 0;
+                            }
+                            randEnc.break_bit[j] = bitDist(rng);
+                        }
+                        
+                        PDPSolution msSol = runAssignmentLS(tabuResult, randEnc, data, 50);
+                        double msFit = msSol.totalCost + msSol.totalPenalty;
+                        if (msFit < bestTabuFit - 0.01) {
+                            bestTabuSol = msSol;
+                            bestTabuFit = msFit;
+                        }
+                    }
+                    
+                    // Update population if improved
+                    if (bestTabuFit < fitness[idx]) {
+                        population[idx] = tabuResult;
+                        fitness[idx] = bestTabuFit;
+                        
+                        cout << "[TABU] Individual " << k << " (rank " << idx 
+                             << "): " << fixed << setprecision(2) << bestTabuFit << endl;
+                        
+                        // Update global best
+                        if (bestTabuFit < bestBeforeTabu) {
+                            bestSequence = tabuResult;
+                            bestSolution = bestTabuSol;
+                            bestBeforeTabu = bestTabuFit;
+                        }
+                    }
+                } catch (const exception& e) {
+                    cerr << "ERROR in Tabu Search for individual " << k << ": " << e.what() << endl;
+                }
             }
             
+            cout << "[TABU] Best after Tabu+AssignLS: " << fixed << setprecision(2)
+                 << bestSolution.totalCost << " (penalty: " << bestSolution.totalPenalty << ")" << endl;
+            
             tabuApplied = true;
+            tabuRounds++;
             noImprovementCounter = 0;
+            
+            // Diversity restart: if Tabu didn't improve after 3 rounds, regenerate 80%
+            if (tabuRounds >= 3 && bestSolution.totalCost + bestSolution.totalPenalty >= bestBeforeTabu - 0.01) {
+                cout << "[DIVERSITY] Restarting 80% of population (keeping top 20%)..." << endl;
+                
+                // Re-sort after Tabu modifications
+                iota(sortedIdx.begin(), sortedIdx.end(), 0);
+                sort(sortedIdx.begin(), sortedIdx.end(), 
+                     [&fitness](int a, int b) { return fitness[a] < fitness[b]; });
+                
+                // Keep top 20%, regenerate 80%
+                int keepCount = max(2, populationSize / 5);
+                
+                // Half from structured init, half from perturbation of best
+                int regenCount = populationSize - keepCount;
+                int fromInit = regenCount / 2;
+                int fromPerturb = regenCount - fromInit;
+                
+                auto newInds = initStructuredPopulationPDP(fromInit, data, runNumber + generation);
+                
+                int regenIdx = 0;
+                for (int k = keepCount; k < populationSize && regenIdx < regenCount; ++k, ++regenIdx) {
+                    int idx = sortedIdx[k];
+                    if (regenIdx < fromInit && regenIdx < (int)newInds.size()) {
+                        population[idx] = newInds[regenIdx];
+                    } else {
+                        // Perturbation of best sequence
+                        vector<int> perturbed = bestSequence;
+                        if (regenIdx % 2 == 0) {
+                            perturbed = doubleBridgePerturbation(perturbed, rng);
+                        } else {
+                            perturbed = ruinRecreatePerturbation(perturbed, rng, 0.4);
+                        }
+                        repairSequence(perturbed, data, rng);
+                        population[idx] = perturbed;
+                    }
+                    PDPSolution sol = decodeAndEvaluate(population[idx], data);
+                    fitness[idx] = sol.totalCost + sol.totalPenalty;
+                }
+                tabuRounds = 0;
+                cout << "[DIVERSITY] Done. Continuing GA..." << endl;
+            }
         }
     }
     
     cout << "\n=========================================" << endl;
     cout << "  GA + TABU COMPLETED" << endl;
     cout << "=========================================" << endl;
+    
+    // Final multi-start Assignment LS on the best solution
+    if (!bestSequence.empty()) {
+        cout << "Running final multi-start Assignment LS (5 starts) on best solution..." << endl;
+        PDPSolution finalSol = assignmentLSPostProcess(bestSequence, data);
+        double bestFit = bestSolution.totalCost + bestSolution.totalPenalty;
+        double finalFit = finalSol.totalCost + finalSol.totalPenalty;
+        if (finalFit < bestFit - 0.01) {
+            bestSolution = finalSol;
+            bestFit = finalFit;
+        }
+        
+        // Multi-start: try 5 random assignment starts
+        for (int ms = 0; ms < 5; ms++) {
+            AssignmentEncoding randEnc;
+            int seqLen = (int)bestSequence.size();
+            randEnc.truck_assign.resize(seqLen);
+            randEnc.drone_assign.resize(seqLen);
+            randEnc.break_bit.resize(seqLen);
+            
+            uniform_int_distribution<> truckDist(0, data.numTrucks - 1);
+            uniform_int_distribution<> droneDist(0, data.numDrones);
+            uniform_int_distribution<> bitDist(0, 1);
+            
+            for (int j = 0; j < seqLen; j++) {
+                randEnc.truck_assign[j] = truckDist(rng);
+                int c = bestSequence[j];
+                if (data.isCustomer(c) && data.nodeTypes[c] == "D" && data.readyTimes[c] > 0) {
+                    randEnc.drone_assign[j] = droneDist(rng);
+                } else {
+                    randEnc.drone_assign[j] = 0;
+                }
+                randEnc.break_bit[j] = bitDist(rng);
+            }
+            
+            PDPSolution msSol = runAssignmentLS(bestSequence, randEnc, data, 50);
+            double msFit = msSol.totalCost + msSol.totalPenalty;
+            if (msFit < bestFit - 0.01) {
+                bestSolution = msSol;
+                bestFit = msFit;
+                cout << "Multi-start " << ms << " improved: " << fixed << setprecision(2) << msFit << endl;
+            }
+        }
+    }
+    
     cout << "Final best cost: " << fixed << setprecision(2)
          << bestSolution.totalCost << " (penalty: " << bestSolution.totalPenalty << ")" << endl;
     
