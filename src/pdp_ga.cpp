@@ -808,7 +808,7 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
                         repairSequence(startSeq, data, rng);
                     }
                     
-                    vector<int> tabuResult = tabuSearchPDP(startSeq, data, 200);
+                    vector<int> tabuResult = tabuSearchPDP(startSeq, data, 50);
                     if (tabuResult.size() != data.numCustomers) continue;
                     
                     // Multi-start Assignment LS: try 3 random starts + 1 greedy, pick best

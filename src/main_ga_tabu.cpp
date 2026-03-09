@@ -85,7 +85,7 @@ int main(int argc, char* argv[]) {
     double costBeforeLS = solution.totalCost;
     
     // Recalculate actual C_max using LocalSearch helper
-    IntegratedLocalSearch ils(data, 100);
+    IntegratedLocalSearch ils(data, 50);
     
     cout << "\n+========================================================+" << endl;
     cout << "|               GA + TABU RESULT                       |" << endl;
