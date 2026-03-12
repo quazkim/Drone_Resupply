@@ -1,0 +1,554 @@
+\documentclass[12pt,a4paper]{article}
+
+% === PACKAGES ===
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[vietnamese]{babel}
+\usepackage{amsmath, amssymb, amsfonts}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{multirow}
+\usepackage{array}
+
+\geometry{margin=2.5cm}
+
+\title{\textbf{Tóm Tắt Chương Trình Giải Bài Toán \\ Pickup-Delivery Problem với Drone Resupply \\ (GA + Tabu Search)}}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+% ============================================================
+\section{Tổng Quan Bài Toán}
+% ============================================================
+
+Chương trình giải bài toán \textbf{Pickup-Delivery Problem with Drone Resupply (PDP-DR)}, trong đó một đội xe tải (trucks) và drone phối hợp phục vụ khách hàng. Mục tiêu là \textbf{tối thiểu hóa makespan} $C_{\max}$~--- thời gian hoàn thành sớm nhất khi tất cả khách hàng đều được phục vụ.
+
+\subsection{Phân Loại Khách Hàng}
+
+Có hai loại khách hàng:
+\begin{itemize}[nosep]
+    \item \textbf{C1 (Type D)}: Khách hàng nhận hàng qua \textit{drone resupply}. Hàng hóa xuất hiện tại depot vào thời điểm $r_i$ (ready time). Drone mang hàng từ depot bay đến \textit{điểm hẹn} (rendezvous point) để giao cho truck, sau đó truck đi giao cho khách.
+    \item \textbf{C2 (Type P $\to$ DL)}: Khách hàng pickup-delivery truyền thống. Truck đến điểm Pickup (P) lấy hàng, rồi đến điểm Delivery (DL) giao hàng. Ràng buộc: P phải được phục vụ \textbf{trước} DL cùng cặp.
+\end{itemize}
+
+\subsection{Mô Hình One Rendezvous}
+
+Drone hoạt động theo mô hình \textbf{One Rendezvous}:
+\begin{enumerate}[nosep]
+    \item Drone xuất phát từ \textbf{depot}, mang tối đa $Q_d$ gói hàng.
+    \item Drone bay \textbf{thẳng} đến \textbf{một điểm hẹn duy nhất} (điểm hẹn = vị trí khách hàng đầu tiên trong trip).
+    \item Tại điểm hẹn, drone giao \textbf{tất cả} gói hàng cho truck.
+    \item Drone \textbf{quay về depot} ngay lập tức.
+    \item Truck tự đi giao hàng cho từng khách hàng trong trip.
+\end{enumerate}
+
+\subsection{Hàm Mục Tiêu}
+
+\begin{equation}
+    \min \; C_{\max} = \max\left\{ 
+        \max_{k \in \mathcal{K}} T_k^{\text{end}}, \;\;
+        \max_{d \in \mathcal{D}} T_d^{\text{return}}
+    \right\}
+\end{equation}
+
+trong đó:
+\begin{itemize}[nosep]
+    \item $T_k^{\text{end}}$: thời gian truck $k$ phục vụ xong khách hàng cuối cùng
+    \item $T_d^{\text{return}}$: thời gian drone $d$ quay về depot
+    \item $\mathcal{K}$: tập xe tải, $\mathcal{D}$: tập drone
+\end{itemize}
+
+% ============================================================
+\section{Tham Số Bài Toán}
+% ============================================================
+
+\begin{table}[h!]
+\centering
+\caption{Tham số mặc định của bài toán}
+\begin{tabular}{llc}
+\toprule
+\textbf{Tham số} & \textbf{Ý nghĩa} & \textbf{Giá trị} \\
+\midrule
+$|\mathcal{K}|$ & Số xe tải & 2 \\
+$|\mathcal{D}|$ & Số drone & 2 \\
+$v_{\text{truck}}$ & Tốc độ xe tải & 30 km/h \\
+$v_{\text{drone}}$ & Tốc độ drone & 60 km/h \\
+$Q_k$ & Tải trọng xe tải & 50 \\
+$Q_d$ & Tải trọng drone (per trip) & $\begin{cases} 2 & n \leq 20 \\ 10 & n > 20 \end{cases}$ \\
+$s_{\text{truck}}$ & Thời gian phục vụ tại mỗi điểm & 3 phút \\
+$E_d$ & Endurance (thời gian bay tối đa) & 90 phút \\
+$t_{\text{resupply}}$ & Thời gian resupply (drone $\to$ truck) & 5 phút \\
+$t_{\text{load}}$ & Thời gian load hàng tại depot & 5 phút \\
+$t_{\text{receive}}$ & Thời gian truck nhận hàng tại depot & 5 phút \\
+\midrule
+\multicolumn{3}{l}{\textit{Khoảng cách}} \\
+Truck & Manhattan: $d_M(i,j) = |x_i - x_j| + |y_i - y_j|$ & \\
+Drone & Euclidean: $d_E(i,j) = \sqrt{(x_i - x_j)^2 + (y_i - y_j)^2}$ & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================
+\section{Mã Hóa Lời Giải (Encoding)}
+% ============================================================
+
+\subsection{Chromosome (Sequence Encoding)}
+
+Mỗi cá thể trong quần thể được biểu diễn bằng một \textbf{hoán vị} (permutation) của $n$ khách hàng:
+\begin{equation}
+    \pi = (\pi_1, \pi_2, \ldots, \pi_n), \quad \pi_i \in \{1, 2, \ldots, n\}
+\end{equation}
+
+Chromosome \textbf{không chứa separator} --- chỉ là thứ tự phục vụ khách hàng. Việc gán khách hàng cho xe tải nào được thực hiện bởi hàm \texttt{decodeAndEvaluate} theo chiến lược tham lam.
+
+\subsection{Assignment Encoding (cho Local Search)}
+
+Ngoài sequence, mỗi lời giải còn có \textbf{assignment encoding} gồm 3 vector:
+\begin{itemize}[nosep]
+    \item $\mathbf{truck\_assign}[i] \in \{0, 1, \ldots, |\mathcal{K}|-1\}$: Xe tải phục vụ khách hàng $\pi_i$
+    \item $\mathbf{drone\_assign}[i] \in \{0, 1, \ldots, |\mathcal{D}|\}$: Drone phục vụ ($0$ = depot return, $>0$ = drone ID)
+    \item $\mathbf{break\_bit}[i] \in \{0, 1\}$: $1$ = bắt đầu drone trip mới, $0$ = tiếp tục trip hiện tại
+\end{itemize}
+
+% ============================================================
+\section{Kiến Trúc Chương Trình}
+% ============================================================
+
+\begin{table}[h!]
+\centering
+\caption{Cấu trúc file mã nguồn}
+\begin{tabular}{lp{10cm}}
+\toprule
+\textbf{File} & \textbf{Chức năng} \\
+\midrule
+\texttt{main\_ga\_tabu.cpp} & Điểm vào chính (entry point), cấu hình tham số, gọi GA+Tabu \\
+\texttt{pdp\_types.h} & Cấu trúc dữ liệu: \texttt{PDPData}, \texttt{PDPSolution}, \texttt{ResupplyEvent}, \texttt{TruckRouteInfo} \\
+\texttt{pdp\_reader.cpp} & Đọc file instance, xây dựng ma trận khoảng cách Manhattan \& Euclidean \\
+\texttt{pdp\_init.cpp} & Khởi tạo quần thể ban đầu (Random, Greedy Time, Sweep, Nearest Neighbor) \\
+\texttt{pdp\_fitness.cpp} & Hàm fitness (\texttt{decodeAndEvaluate}), drone trip evaluation, merge strategies, Assignment LS \\
+\texttt{pdp\_ga.cpp} & Genetic Algorithm: crossover, mutation, selection, adaptive operators \\
+\texttt{pdp\_tabu.cpp} & Tabu Search: 6 loại move, adaptive weights, aspiration criterion \\
+\texttt{pdp\_localsearch.cpp} & Integrated Local Search: truck operators + drone operators + SA acceptance \\
+\texttt{pdp\_validation.cpp} & Kiểm tra tính hợp lệ của lời giải \\
+\texttt{pdp\_utils.cpp} & Các hàm tiện ích (Euclidean distance, in lời giải, ...) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================
+\section{Khởi Tạo Quần Thể}
+% ============================================================
+
+Quần thể ban đầu gồm $N = 200$ cá thể, được khởi tạo bằng 4 phương pháp:
+
+\begin{table}[h!]
+\centering
+\caption{Phân bổ khởi tạo quần thể}
+\begin{tabular}{lcp{8cm}}
+\toprule
+\textbf{Phương pháp} & \textbf{Tỷ lệ} & \textbf{Mô tả} \\
+\midrule
+Random & 10\% & Hoán vị ngẫu nhiên các khách hàng \\
+Greedy Time & 30\% & Tham lam theo $\text{ready\_time} + \text{travel\_time}$, chọn ngẫu nhiên trong top 5 \\
+Sweep & 30\% & Sắp xếp theo góc cực (polar angle) từ depot, góc gốc ngẫu nhiên \\
+Nearest Neighbor & 30\% & Tham lam theo khoảng cách gần nhất, điểm bắt đầu ngẫu nhiên \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Tất cả cá thể sau khi tạo đều được \textbf{repair} để đảm bảo:
+\begin{itemize}[nosep]
+    \item Mỗi khách hàng xuất hiện đúng 1 lần
+    \item Ràng buộc P trước DL (precedence constraint) được thỏa mãn
+\end{itemize}
+
+% ============================================================
+\section{Hàm Fitness: \texttt{decodeAndEvaluate}}
+% ============================================================
+
+Đây là hàm cốt lõi, giải mã chromosome thành lời giải hoàn chỉnh.
+
+\begin{algorithm}[h!]
+\caption{decodeAndEvaluate($\pi$, data)}
+\begin{algorithmic}[1]
+\STATE Khởi tạo $|\mathcal{K}|$ xe tải tại depot, $|\mathcal{D}|$ drone tại depot
+\FOR{$i = 1$ \TO $n$}
+    \STATE $v \leftarrow \pi_i$ \COMMENT{Khách hàng tiếp theo trong sequence}
+    \IF{$v$ là \textbf{DL} (delivery)}
+        \STATE Gán $v$ cho xe đã pickup P tương ứng (ràng buộc precedence)
+    \ELSE
+        \STATE Chọn xe tải $k^* = \arg\min_{k} T_k^{\text{available}}$ \COMMENT{Xe rảnh sớm nhất}
+        \IF{$v$ là \textbf{Type D} (C1 customer)}
+            \STATE Tính chi phí \textbf{Drone Resupply} (DJ1) với consolidation
+            \STATE Tính chi phí \textbf{Depot Return} (DJ2)
+            \IF{$\text{cost}_{DJ1} < \text{cost}_{DJ2}$}
+                \STATE Thực hiện drone resupply (One Rendezvous Model)
+            \ELSE
+                \STATE Truck về depot lấy hàng rồi đi giao
+            \ENDIF
+        \ELSIF{$v$ là \textbf{Type P} (pickup)}
+            \STATE Truck đi đến P, lấy hàng, đánh dấu cặp pickup
+        \ENDIF
+    \ENDIF
+    \STATE $C_{\max} \leftarrow \max(C_{\max}, T_{k^*}^{\text{available}})$
+\ENDFOR
+\STATE Áp dụng \textbf{Merge Strategies} nếu có $\geq 2$ drone trips
+\STATE
+\STATE // \textbf{Assignment Local Search (tùy chọn)}
+\STATE Trích xuất encoding $(\mathbf{truck\_assign}, \mathbf{drone\_assign}, \mathbf{break\_bit})$ từ lời giải greedy
+\STATE Chạy \textbf{Assignment LS} (Best-Improvement, 5 operators, tối đa 50 iter)
+\STATE Nếu LS tìm được lời giải tốt hơn $\Rightarrow$ cập nhật
+\STATE
+\STATE \RETURN $C_{\max} + \text{penalty}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Đánh Giá Drone Trip}
+
+Cho một drone trip với tập khách hàng $S = \{c_1, c_2, \ldots, c_m\}$:
+
+\begin{align}
+    T_{\text{drone\_ready}} &= \max\left(T_d^{\text{available}}, \max_{c \in S} r_c\right) \\
+    T_{\text{depart}} &= T_{\text{drone\_ready}} + t_{\text{load}} \\
+    T_{\text{drone\_arrive}} &= T_{\text{depart}} + \frac{d_E(\text{depot}, c_1)}{v_{\text{drone}}} \times 60 \\
+    T_{\text{truck\_arrive}} &= T_k^{\text{available}} + \frac{d_M(\text{pos}_k, c_1)}{v_{\text{truck}}} \times 60 \\
+    T_{\text{resupply\_start}} &= \max(T_{\text{drone\_arrive}}, T_{\text{truck\_arrive}}) \\
+    T_{\text{resupply\_end}} &= T_{\text{resupply\_start}} + t_{\text{resupply}} \\
+    T_{\text{drone\_return}} &= T_{\text{resupply\_end}} + \frac{d_E(c_1, \text{depot})}{v_{\text{drone}}} \times 60
+\end{align}
+
+\textbf{Ràng buộc endurance}: $t_{\text{fly\_to}} + t_{\text{wait}} + t_{\text{return}} \leq E_d$
+
+\subsection{Consolidation}
+
+Nhiều khách hàng Type D có thể được gom vào \textbf{một drone trip} nếu thỏa mãn:
+\begin{itemize}[nosep]
+    \item Cùng loại D với $r_i > 0$
+    \item Chênh lệch ready time $\leq 30$ phút
+    \item Khoảng cách Euclidean $\leq 10$ km
+    \item Số lượng $\leq Q_d$ (drone capacity)
+\end{itemize}
+
+\subsection{Merge Strategies}
+
+Sau khi decode, chương trình thử \textbf{gộp} các drone trip theo 3 chiến lược (tối đa 3 vòng lặp):
+\begin{enumerate}[nosep]
+    \item \textbf{Sequential Merge}: Gộp các trip liên tiếp trên cùng truck route
+    \item \textbf{Same-Drone Merge}: Gộp các trip cùng drone (tiết kiệm thời gian bay)
+    \item \textbf{Proximity Merge}: Gộp các trip có khách hàng gần nhau ($d_E < 5$ km)
+\end{enumerate}
+
+Chỉ gộp khi improvement $> 1$ phút và tổng capacity $\leq Q_d$.
+
+\subsection{Assignment Local Search (trong Fitness)}
+
+Sau khi decode greedy và merge, hàm \texttt{decodeAndEvaluate} có thể chạy thêm \textbf{Assignment Local Search} để tối ưu hóa việc gán xe/drone cho từng khách hàng mà \textit{không thay đổi thứ tự sequence} $\pi$.
+
+\textbf{Ý tưởng}: Giữ nguyên sequence $\pi$ (thứ tự phục vụ), nhưng thay đổi \textit{ai phục vụ} (truck nào, drone nào, tách/gộp trip) để giảm $C_{\max}$.
+
+\textbf{Assignment Encoding} gồm 3 vector quyết định cho mỗi vị trí $i$ trong sequence:
+\begin{itemize}[nosep]
+    \item $\mathbf{truck\_assign}[i]$: Truck nào phục vụ $\pi_i$
+    \item $\mathbf{drone\_assign}[i]$: Drone nào mang hàng ($0$ = truck tự về depot lấy)
+    \item $\mathbf{break\_bit}[i]$: Bắt đầu drone trip mới ($1$) hay tiếp tục trip cũ ($0$)
+\end{itemize}
+
+\textbf{5 Operators} (Best-Improvement --- thử tất cả, chọn move tốt nhất):
+
+\begin{table}[h!]
+\centering
+\caption{Operators trong Assignment Local Search}
+\begin{tabular}{clp{8cm}}
+\toprule
+\textbf{OP} & \textbf{Tên} & \textbf{Mô tả} \\
+\midrule
+1 & Flip truck & Đổi $truck\_assign[i]$ sang truck khác (kèm DL partner nếu là P) \\
+2 & Flip drone & Đổi $drone\_assign[i]$ cho Type D: thử $0, 1, \ldots, |\mathcal{D}|$ \\
+3 & Flip break\_bit & Đổi $break\_bit[i]$: tách hoặc gộp drone trip tại vị trí $i$ \\
+4 & Swap truck & Hoán đổi $truck\_assign$ giữa 2 khách hàng khác truck \\
+5 & Swap drone & Hoán đổi $drone\_assign$ giữa 2 khách hàng Type D \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Quy trình}:
+\begin{enumerate}[nosep]
+    \item Trích xuất encoding từ lời giải greedy: \texttt{initFromSolution($\pi$, sol)}
+    \item Lặp tối đa 50 iter:
+    \begin{enumerate}[nosep]
+        \item Duyệt tất cả 5 operators trên tất cả vị trí $i$ (và cặp $i,j$ cho OP4, OP5)
+        \item Mỗi lần thử: thay đổi encoding $\to$ \texttt{decodeFromEncoding} $\to$ tính cost
+        \item Chọn move có cost thấp nhất (best-improvement)
+        \item Nếu có cải thiện $>$ 0.01: áp dụng move, tiếp tục
+        \item Nếu không: dừng sớm (\textbf{break})
+    \end{enumerate}
+\end{enumerate}
+
+\textbf{Lưu ý}: Khi được bật (\texttt{ENABLE\_ASSIGNMENT\_LS = true}), LS chạy \textit{bên trong mỗi lần gọi fitness}, làm tăng đáng kể chi phí tính toán (phù hợp với $n \leq 20$). Với instance lớn ($n \geq 30$), LS chỉ chạy dạng \textbf{post-processing} sau Tabu Search.
+
+% ============================================================
+\section{Genetic Algorithm (GA)}
+% ============================================================
+
+\begin{table}[h!]
+\centering
+\caption{Tham số GA}
+\begin{tabular}{lc}
+\toprule
+\textbf{Tham số} & \textbf{Giá trị} \\
+\midrule
+Population size ($N$) & 200 \\
+Max generations & 500 \\
+Base mutation rate & 0.1 (adaptive) \\
+Tournament size & 3 \\
+Elitism & 30\% parents giữ lại \\
+Tabu threshold & 10\% of max generations \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Toán Tử Crossover (Adaptive)}
+
+4 toán tử crossover với trọng số tự thích nghi:
+
+\begin{enumerate}[nosep]
+    \item \textbf{Order Crossover (OX)}: Sao chép đoạn từ cha 1, điền phần còn lại từ cha 2 theo thứ tự
+    \item \textbf{Partially Mapped Crossover (PMX)}: Sao chép đoạn + ánh xạ (mapping) để tránh trùng
+    \item \textbf{Cycle Crossover (CX)}: Bảo toàn các cycle giữa hai cha mẹ
+    \item \textbf{Edge Recombination (ERX)}: Bảo toàn các cạnh (adjacency) từ cả hai cha mẹ
+\end{enumerate}
+
+Trọng số crossover được cập nhật mỗi $\lfloor \frac{\text{maxGen}}{20} \rfloor$ thế hệ dựa trên success rate:
+\begin{equation}
+    w_i^{\text{new}} = 0.1 + 0.8 \times \frac{\text{success\_rate}_i}{\sum_j \text{success\_rate}_j}
+\end{equation}
+
+\subsection{Toán Tử Mutation (Adaptive)}
+
+5 toán tử mutation:
+\begin{enumerate}[nosep]
+    \item \textbf{Swap}: Hoán đổi 2 vị trí ngẫu nhiên
+    \item \textbf{Inversion}: Đảo ngược một đoạn con
+    \item \textbf{Scramble}: Xáo trộn một đoạn con
+    \item \textbf{Insertion}: Di chuyển một phần tử đến vị trí khác
+    \item \textbf{Displacement}: Di chuyển một đoạn con đến vị trí khác
+\end{enumerate}
+
+Mutation rate tự thích nghi:
+\begin{equation}
+    p_m = \begin{cases}
+        \min(0.5, \; p_m \times 1.2) & \text{nếu không cải thiện} > 5 \text{ thế hệ} \\
+        \max(0.5 \times p_m^{\text{base}}, \; p_m \times 0.9) & \text{nếu đang cải thiện}
+    \end{cases}
+\end{equation}
+
+\subsection{Selection}
+
+Chọn lọc thế hệ mới theo tỷ lệ:
+\begin{itemize}[nosep]
+    \item 50\% offspring tốt nhất (theo fitness tăng dần)
+    \item 20\% offspring ngẫu nhiên (từ phần còn lại --- duy trì đa dạng)
+    \item 30\% parents tốt nhất (elitism)
+\end{itemize}
+
+% ============================================================
+\section{Tabu Search}
+% ============================================================
+
+Tabu Search được kích hoạt khi GA \textbf{không cải thiện} sau $\lfloor \frac{\text{maxGen}}{10} \rfloor$ thế hệ liên tiếp.
+
+\subsection{Cấu Hình}
+
+\begin{itemize}[nosep]
+    \item Áp dụng cho top 10\% cá thể + random 10\% cá thể (kèm perturbation)
+    \item Mỗi cá thể chạy Tabu Search với 50 iterations
+    \item Tabu tenure: $\lfloor 0.2 \times n + \text{rand}(0,10) \rfloor$
+    \item Aspiration criterion: chấp nhận move tabu nếu tốt hơn best-so-far
+\end{itemize}
+
+\subsection{6 Loại Move (Adaptive Weights)}
+
+\begin{table}[h!]
+\centering
+\caption{Các move trong Tabu Search}
+\begin{tabular}{clp{8cm}}
+\toprule
+\textbf{ID} & \textbf{Move} & \textbf{Mô tả} \\
+\midrule
+0 & Swap & Hoán đổi 2 khách hàng \\
+1 & Insert & Di chuyển 1 khách hàng đến vị trí khác \\
+2 & 2-opt & Đảo ngược đoạn $[i, j]$ (giới hạn $j - i \leq 20$) \\
+3 & 2-opt* & Biến thể 2-opt với đoạn khác (giới hạn $j - i \leq 15$) \\
+4 & Or-opt & Di chuyển khối 1--3 phần tử đến vị trí khác \\
+5 & Relocate-pair & Di chuyển cặp 2 phần tử liền kề \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Trọng số move được cập nhật mỗi 100 iterations:
+\begin{equation}
+    w_i = (1 - \delta_4) \times w_i + \delta_4 \times \frac{\text{score}_i}{\text{used\_count}_i}, \quad \delta_4 = 0.5
+\end{equation}
+
+\subsection{Perturbation (Đa Dạng Hóa)}
+
+Trước khi chạy Tabu, các cá thể (trừ top-1) được \textbf{perturbation}:
+\begin{itemize}[nosep]
+    \item \textbf{Double-Bridge}: Chia sequence thành 4 đoạn, ghép lại theo thứ tự $(A, C, B, D)$
+    \item \textbf{Ruin-Recreate}: Xóa 30\% khách hàng ngẫu nhiên, chèn lại vị trí ngẫu nhiên
+\end{itemize}
+
+\subsection{Assignment Local Search (Post-Tabu)}
+
+Sau Tabu Search, mỗi cá thể chạy \textbf{Assignment LS} để tối ưu gán xe/drone:
+
+\begin{algorithm}[h!]
+\caption{Assignment Local Search (Best-Improvement)}
+\begin{algorithmic}[1]
+\STATE Giải mã $\pi$ để lấy encoding $(truck\_assign, drone\_assign, break\_bit)$
+\FOR{$\text{iter} = 1$ \TO $\text{max\_iter}$}
+    \STATE Tìm move tốt nhất trong 5 operators:
+    \STATE \quad \textbf{OP1}: Flip $truck\_assign[i]$ (thử tất cả trucks $\neq$ hiện tại)
+    \STATE \quad \textbf{OP2}: Flip $drone\_assign[i]$ cho Type D (thử $0, 1, \ldots, |\mathcal{D}|$)
+    \STATE \quad \textbf{OP3}: Flip $break\_bit[i]$ (tách/gộp drone trip)
+    \STATE \quad \textbf{OP4}: Swap $truck\_assign$ giữa 2 khách hàng
+    \STATE \quad \textbf{OP5}: Swap $drone\_assign$ giữa 2 khách hàng Type D
+    \IF{Có move cải thiện}
+        \STATE Áp dụng move, cập nhật encoding
+    \ELSE
+        \STATE \textbf{break} \COMMENT{Không còn cải thiện}
+    \ENDIF
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+Thêm vào đó, \textbf{Multi-start}: 3 encoding ngẫu nhiên + 1 greedy, chọn kết quả tốt nhất.
+
+% ============================================================
+\section{Integrated Local Search (ILS)}
+% ============================================================
+
+Sau GA+Tabu, lời giải tốt nhất có thể được tinh chỉnh bằng ILS với \textbf{Simulated Annealing acceptance}:
+
+\subsection{Truck Operators}
+\begin{itemize}[nosep]
+    \item \textbf{2-opt}: Đảo ngược đoạn trong truck route
+    \item \textbf{Swap}: Hoán đổi 2 node trong route
+    \item \textbf{Relocate}: Di chuyển 1 node sang vị trí khác
+    \item \textbf{Cross-Exchange}: Hoán đổi đoạn giữa 2 trucks
+\end{itemize}
+
+\subsection{Drone Operators}
+\begin{itemize}[nosep]
+    \item \textbf{Reorder}: Thay đổi thứ tự khách trong 1 trip
+    \item \textbf{Swap}: Hoán đổi khách giữa 2 trips
+    \item \textbf{Move}: Di chuyển khách giữa các trips
+    \item \textbf{Merge}: Gộp 2 drone trips thành 1
+    \item \textbf{Split}: Tách 1 trip thành 2 trips nhỏ
+    \item \textbf{Reassign}: Đổi drone phục vụ trip
+    \item \textbf{Insert-Into-Trip}: Thêm khách vào trip có sẵn
+\end{itemize}
+
+\subsection{Adaptive Operator Selection}
+
+Trọng số operator cập nhật dựa trên:
+\begin{equation}
+    w_{\text{op}} = 0.5 + 2.0 \times \text{success\_rate} + 0.1 \times \overline{\text{improvement}}, \quad w_{\text{op}} \in [0.1, 5.0]
+\end{equation}
+
+% ============================================================
+\section{Validation (Kiểm Tra Lời Giải)}
+% ============================================================
+
+Chương trình kiểm tra 6 tiêu chí:
+\begin{enumerate}[nosep]
+    \item \textbf{Customer Coverage}: Tất cả khách hàng đều được phục vụ
+    \item \textbf{Drone Endurance}: Thời gian bay $\leq E_d = 90$ phút
+    \item \textbf{Timeline Consistency}: Thời gian đến $\geq$ thời gian rời node trước đó
+    \item \textbf{Drone-Truck Sync}: Drone và truck đến trước khi resupply bắt đầu
+    \item \textbf{$C_{\max}$ Verification}: Kiểm tra $C_{\max}$ tính toán khớp với báo cáo
+    \item \textbf{Depot Returns}: Đếm số lần truck quay về depot (chỉ số hiệu quả)
+\end{enumerate}
+
+% ============================================================
+\section{Quy Trình Tổng Thể}
+% ============================================================
+
+\begin{algorithm}[h!]
+\caption{Quy trình tổng thể: GA + Tabu Search}
+\begin{algorithmic}[1]
+\STATE \textbf{Input}: Instance file (n khách hàng, tọa độ, ready times)
+\STATE \textbf{Output}: Lời giải tốt nhất (routes, drone trips, $C_{\max}$)
+\STATE
+\STATE // \textbf{Phase 1: Khởi tạo}
+\STATE Đọc instance, xây dựng ma trận khoảng cách
+\STATE Khởi tạo $N = 200$ cá thể (10\% Random + 30\% Greedy + 30\% Sweep + 30\% NN)
+\STATE Đánh giá fitness ban đầu
+\STATE
+\STATE // \textbf{Phase 2: Genetic Algorithm}
+\FOR{gen $= 0$ \TO $499$}
+    \STATE Chọn cha mẹ (Tournament Selection, size = 3)
+    \STATE Tạo offspring bằng Adaptive Crossover (OX/PMX/CX/ERX)
+    \STATE Mutation adaptive (Swap/Inversion/Scramble/Insertion/Displacement)
+    \STATE Repair offspring (đảm bảo valid permutation + precedence P$\to$DL)
+    \STATE Đánh giá offspring: \texttt{decodeAndEvaluate}
+    \STATE Selection: 50\% best offspring + 20\% random offspring + 30\% best parents
+    \STATE Cập nhật best solution
+    \STATE
+    \IF{Không cải thiện $\geq \lfloor \text{maxGen}/10 \rfloor$ thế hệ}
+        \STATE // \textbf{Phase 3: Tabu Search Intensification}
+        \STATE Chạy Tabu Search (50 iter) cho top 10\% + random 10\% (kèm perturbation)
+        \STATE Chạy Assignment LS (multi-start) cho mỗi cá thể sau Tabu
+        \STATE Cập nhật quần thể
+    \ENDIF
+    \STATE Cập nhật trọng số adaptive operators
+\ENDFOR
+\STATE
+\STATE // \textbf{Phase 4: Output}
+\STATE In lời giải chi tiết (truck routes, drone trips, timeline)
+\STATE Kiểm tra tính hợp lệ (Validation)
+\STATE Báo cáo $C_{\max}$ cuối cùng
+\end{algorithmic}
+\end{algorithm}
+
+% ============================================================
+\section{Instances}
+% ============================================================
+
+Các instance được đặt tên theo format: \texttt{U\_n\_$\beta$\_Num\_i.txt}, trong đó:
+\begin{itemize}[nosep]
+    \item \texttt{U}: Phân bố khách hàng đều (Uniform)
+    \item \texttt{n}: Số khách hàng ($n \in \{10, 30, 50, 100\}$)
+    \item $\beta$: Hệ số spread của ready time ($\beta \in \{0.5, 1.0, 1.5, 2.0, 2.5, 3.0\}$)
+    \item \texttt{i}: Số thứ tự instance ($i \in \{1, \ldots, 10\}$)
+\end{itemize}
+
+Mỗi instance chứa danh sách node với: ID, tọa độ $(x, y)$, loại (P/DL/D), ready time $r_i$, pair ID.
+
+Depot mặc định tại $(10, 10)$, có thể thay đổi qua tham số dòng lệnh \texttt{--depot x,y}.
+
+% ============================================================
+\section{Sử Dụng Chương Trình}
+% ============================================================
+
+\begin{verbatim}
+# Biên dịch
+g++ -O2 -std=c++17 -o main_ga_tabu.exe src/*.cpp
+
+# Chạy với depot mặc định (10, 10)
+./main_ga_tabu.exe "Instances 2/U_30_0.5_Num_1.txt"
+
+# Chạy với depot tùy chỉnh (-10, 10)
+./main_ga_tabu.exe "Instances 2/U_30_0.5_Num_1.txt" --depot -10,10
+\end{verbatim}
+
+\end{document}

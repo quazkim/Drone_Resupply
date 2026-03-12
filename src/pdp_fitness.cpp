@@ -14,7 +14,7 @@ using namespace std;
 // ============ CONFIGURATION ============
 static const bool ENABLE_MERGE_STRATEGIES = true;   // Set to false to disable merge
 static const bool ENABLE_CONSOLIDATION = true;      // Allow multiple packages per trip
-static const bool ENABLE_ASSIGNMENT_LS = false;      // Disabled: run only as post-processing
+static const bool ENABLE_ASSIGNMENT_LS = false;      // Disabled: first-improvement LS inside fitness
 static const int ASSIGNMENT_LS_MAX_ITER = 50;        // Max iterations for assignment LS
 
 // ============ FORWARD DECLARATIONS ============
