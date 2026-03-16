@@ -8,6 +8,7 @@
 #include <cmath>
 #include <set>
 #include <map>
+#include <unordered_map>
 
 using namespace std;
 
@@ -881,6 +882,11 @@ PDPSolution runAssignmentLS(
     PDPSolution best_sol = decodeFromEncoding(seq, enc, data);
     double best_cost = best_sol.totalCost + best_sol.totalPenalty * 1000.0;
     int n = (int)seq.size();
+    // Re-enable sliding window pruning for speed: restricts OP4/OP5 neighborhood
+    const int truckSwapWindow = max(8, min(30, n / 3));
+    const int droneSwapWindow = max(8, min(30, n / 3));
+    unordered_map<size_t, double> eval_cache;
+    eval_cache.reserve((size_t)n * (size_t)max_iter * 2);
 
     // Precompute DL partner indices for P nodes
     vector<int> dl_partner(n, -1);
@@ -900,11 +906,34 @@ PDPSolution runAssignmentLS(
         }
     }
 
+    auto hashEncoding = [&](const AssignmentEncoding& e) -> size_t {
+        size_t h = 1469598103934665603ULL; // FNV offset basis
+        auto mix = [&](int x) {
+            h ^= (size_t)(x + 1315423911);
+            h *= 1099511628211ULL;
+        };
+        for (int v : e.truck_assign) mix(v);
+        mix(-7);
+        for (int v : e.drone_assign) mix(v);
+        mix(-13);
+        for (int v : e.break_bit) mix(v);
+        return h;
+    };
+
+    auto evalCurrentEncodingCost = [&]() -> double {
+        size_t key = hashEncoding(enc);
+        auto it = eval_cache.find(key);
+        if (it != eval_cache.end()) return it->second;
+        PDPSolution sol = decodeFromEncoding(seq, enc, data);
+        double cost = sol.totalCost + sol.totalPenalty * 1000.0;
+        eval_cache.emplace(key, cost);
+        return cost;
+    };
+
     for (int iter = 0; iter < max_iter; iter++) {
         // Best-improvement: find the best move across all operators
         double iter_best_cost = best_cost;
         int best_op = -1, best_i = -1, best_j = -1, best_val = -1;
-        PDPSolution iter_best_sol;
 
         for (int i = 0; i < n; i++) {
             int c = seq[i];
@@ -922,11 +951,9 @@ PDPSolution runAssignmentLS(
                     enc.truck_assign[i] = t;
                     if (di >= 0) enc.truck_assign[di] = t;
 
-                    PDPSolution sol = decodeFromEncoding(seq, enc, data);
-                    double cost = sol.totalCost + sol.totalPenalty * 1000.0;
+                    double cost = evalCurrentEncodingCost();
                     if (cost < iter_best_cost - 0.01) {
                         iter_best_cost = cost;
-                        iter_best_sol = sol;
                         best_op = 1; best_i = i; best_val = t;
                     }
 
@@ -942,11 +969,9 @@ PDPSolution runAssignmentLS(
                     if (d == old_drone) continue;
                     enc.drone_assign[i] = d;
 
-                    PDPSolution sol = decodeFromEncoding(seq, enc, data);
-                    double cost = sol.totalCost + sol.totalPenalty * 1000.0;
+                    double cost = evalCurrentEncodingCost();
                     if (cost < iter_best_cost - 0.01) {
                         iter_best_cost = cost;
-                        iter_best_sol = sol;
                         best_op = 2; best_i = i; best_val = d;
                     }
 
@@ -958,11 +983,9 @@ PDPSolution runAssignmentLS(
             if (ctype == "D" && data.readyTimes[c] > 0 && enc.drone_assign[i] > 0) {
                 enc.break_bit[i] = 1 - enc.break_bit[i];
 
-                PDPSolution sol = decodeFromEncoding(seq, enc, data);
-                double cost = sol.totalCost + sol.totalPenalty * 1000.0;
+                double cost = evalCurrentEncodingCost();
                 if (cost < iter_best_cost - 0.01) {
                     iter_best_cost = cost;
-                    iter_best_sol = sol;
                     best_op = 3; best_i = i;
                 }
 
@@ -971,7 +994,8 @@ PDPSolution runAssignmentLS(
 
             // === OP4: Swap truck assignment between two customers ===
             if (ctype != "DL") {
-                for (int j = i + 1; j < n; j++) {
+                int jLimit = min(n, i + 1 + truckSwapWindow);
+                for (int j = i + 1; j < jLimit; j++) {
                     int c2 = seq[j];
                     if (!data.isCustomer(c2)) continue;
                     if (data.nodeTypes[c2] == "DL") continue;
@@ -988,11 +1012,9 @@ PDPSolution runAssignmentLS(
                     if (di >= 0) enc.truck_assign[di] = tj;
                     if (dj >= 0) enc.truck_assign[dj] = ti;
 
-                    PDPSolution sol = decodeFromEncoding(seq, enc, data);
-                    double cost = sol.totalCost + sol.totalPenalty * 1000.0;
+                    double cost = evalCurrentEncodingCost();
                     if (cost < iter_best_cost - 0.01) {
                         iter_best_cost = cost;
-                        iter_best_sol = sol;
                         best_op = 4; best_i = i; best_j = j;
                     }
 
@@ -1006,7 +1028,8 @@ PDPSolution runAssignmentLS(
 
             // === OP5: Swap drone assignment between two D customers ===
             if (ctype == "D" && data.readyTimes[c] > 0) {
-                for (int j = i + 1; j < n; j++) {
+                int jLimit = min(n, i + 1 + droneSwapWindow);
+                for (int j = i + 1; j < jLimit; j++) {
                     int c2 = seq[j];
                     if (!data.isCustomer(c2)) continue;
                     if (data.nodeTypes[c2] != "D" || data.readyTimes[c2] <= 0) continue;
@@ -1016,11 +1039,9 @@ PDPSolution runAssignmentLS(
                     enc.drone_assign[i] = dj_val;
                     enc.drone_assign[j] = di_val;
 
-                    PDPSolution sol = decodeFromEncoding(seq, enc, data);
-                    double cost = sol.totalCost + sol.totalPenalty * 1000.0;
+                    double cost = evalCurrentEncodingCost();
                     if (cost < iter_best_cost - 0.01) {
                         iter_best_cost = cost;
-                        iter_best_sol = sol;
                         best_op = 5; best_i = i; best_j = j;
                     }
 
@@ -1033,9 +1054,6 @@ PDPSolution runAssignmentLS(
 
         // Apply the best move found
         if (best_op < 0) break;  // no improving move found
-
-        best_sol = iter_best_sol;
-        best_cost = iter_best_cost;
 
         if (best_op == 1) {
             enc.truck_assign[best_i] = best_val;
@@ -1057,6 +1075,10 @@ PDPSolution runAssignmentLS(
             enc.drone_assign[best_i] = dj_val;
             enc.drone_assign[best_j] = di_val;
         }
+
+        // Decode only once after committing the best move.
+        best_sol = decodeFromEncoding(seq, enc, data);
+        best_cost = best_sol.totalCost + best_sol.totalPenalty * 1000.0;
     }
 
     return best_sol;

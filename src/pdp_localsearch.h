@@ -46,6 +46,7 @@ enum class OperatorType {
     DRONE_SWAP,
     DRONE_MOVE,
     DRONE_MERGE,
+    DRONE_CONSOLIDATE,  // NEW: Merge trips serving same truck
     DRONE_SPLIT,
     DRONE_REASSIGN,
     DRONE_INSERT_INTO_TRIP,
@@ -198,8 +199,9 @@ private:
     bool droneReassign(PDPSolution& sol);
     
     // Reorder: Thay doi thu tu customers trong 1 trip
-    bool droneReorderTrip(PDPSolution& sol);
-    
+    bool droneReorderTrip(PDPSolution& sol);    
+    // NEW: Drone Consolidation - Gop nhung trips nho thanh trips lon hon de giam sorties
+    bool optimizeDroneConsolidation(PDPSolution& sol);    
     // InsertIntoTrip: Them customer dang duoc phuc vu rieng vao trip co san (NEW)
     bool droneInsertIntoTrip(PDPSolution& sol);
     

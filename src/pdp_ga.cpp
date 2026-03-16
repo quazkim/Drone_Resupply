@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <climits>
 #include <numeric>
+#include <unordered_set>
 
 using namespace std;
 
@@ -113,6 +114,58 @@ struct AdaptiveParams {
         return dist(gen);
     }
 };
+
+struct OnlineSurrogate {
+    int n = 0;
+    double sumX = 0.0;
+    double sumY = 0.0;
+    double sumXX = 0.0;
+    double sumXY = 0.0;
+
+    void update(double x, double y) {
+        n++;
+        sumX += x;
+        sumY += y;
+        sumXX += x * x;
+        sumXY += x * y;
+    }
+
+    bool ready() const {
+        return n >= 30;
+    }
+
+    double predict(double x, double fallback) const {
+        if (n < 2) return fallback;
+        double denom = n * sumXX - sumX * sumX;
+        if (fabs(denom) < 1e-9) return fallback;
+        double a = (n * sumXY - sumX * sumY) / denom;
+        double b = (sumY - a * sumX) / n;
+        double y = a * x + b;
+        if (!isfinite(y)) return fallback;
+        return y;
+    }
+};
+
+static double edgeNoveltyScore(const vector<int>& seq, const vector<int>& reference) {
+    if (seq.size() < 2 || reference.size() < 2 || seq.size() != reference.size()) return 1.0;
+    unordered_set<long long> refEdges;
+    refEdges.reserve(reference.size() * 2);
+    auto edgeKey = [](int a, int b) -> long long {
+        return (static_cast<long long>(a) << 32) ^ static_cast<unsigned int>(b);
+    };
+
+    for (size_t i = 0; i + 1 < reference.size(); ++i) {
+        refEdges.insert(edgeKey(reference[i], reference[i + 1]));
+    }
+
+    int overlap = 0;
+    for (size_t i = 0; i + 1 < seq.size(); ++i) {
+        if (refEdges.count(edgeKey(seq[i], seq[i + 1])) > 0) overlap++;
+    }
+
+    int totalEdges = max(1, (int)seq.size() - 1);
+    return 1.0 - (double)overlap / totalEdges;
+}
 
 // ============ PERTURBATION OPERATORS (for Tabu diversification) ============
 
@@ -526,32 +579,28 @@ vector<int> tournamentSelection(const vector<vector<int>>& population,
 
 // ============ ADAPTIVE EVALUATION ============
 
-// ─É├ính gi├í xem offspring c├│ tß╗æt h╞ín parents kh├┤ng
+// Lightweight structural proxy to avoid extra decode calls during operator scoring.
+// Returns true when offspring is sufficiently different from both parents.
 bool evaluateImprovement(const vector<int>& offspring, const vector<int>& parent1, 
                         const vector<int>& parent2, const PDPData& data) {
-    PDPSolution offspringSol = decodeAndEvaluate(offspring, data);
-    PDPSolution parent1Sol = decodeAndEvaluate(parent1, data);
-    PDPSolution parent2Sol = decodeAndEvaluate(parent2, data);
-    
-    double offspringFit = offspringSol.totalCost + offspringSol.totalPenalty;
-    double parent1Fit = parent1Sol.totalCost + parent1Sol.totalPenalty;
-    double parent2Fit = parent2Sol.totalCost + parent2Sol.totalPenalty;
-    
-    double bestParentFit = min(parent1Fit, parent2Fit);
-    
-    return offspringFit < bestParentFit;
+    (void)data;
+    int diff1 = 0;
+    int diff2 = 0;
+    int n = (int)offspring.size();
+    for (int i = 0; i < n; ++i) {
+        if (offspring[i] != parent1[i]) diff1++;
+        if (offspring[i] != parent2[i]) diff2++;
+    }
+    // Mark as promising if child differs by at least 20% from both parents.
+    int minDiff = max(1, n / 5);
+    return (diff1 >= minDiff && diff2 >= minDiff);
 }
 
-// ─É├ính gi├í xem mutated solution c├│ tß╗æt h╞ín original kh├┤ng
+// Lightweight proxy: count mutation as useful if sequence actually changed.
 bool evaluateMutationImprovement(const vector<int>& mutated, const vector<int>& original, 
                                const PDPData& data) {
-    PDPSolution mutatedSol = decodeAndEvaluate(mutated, data);
-    PDPSolution originalSol = decodeAndEvaluate(original, data);
-    
-    double mutatedFit = mutatedSol.totalCost + mutatedSol.totalPenalty;
-    double originalFit = originalSol.totalCost + originalSol.totalPenalty;
-    
-    return mutatedFit < originalFit;
+    (void)data;
+    return mutated != original;
 }
 
 // ============ MAIN GA ALGORITHM ============
@@ -567,11 +616,12 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
     cout << "Population size: " << populationSize << endl;
     cout << "Max generations: " << maxGenerations << endl;
     cout << "Base mutation rate: " << mutationRate << " (adaptive)" << endl;
-    cout << "Tabu threshold: 10% of max gen without improvement" << endl;
+    cout << "Tabu threshold: decoded-evaluation based" << endl;
     cout << "Adaptive operators: ENABLED" << endl;
     
     // Initialize adaptive parameters
     AdaptiveParams adaptiveParams(mutationRate);
+    OnlineSurrogate surrogate;
     
     // STEP 1: Initialize population
     cout << "\n[1] Initializing population..." << endl;
@@ -597,7 +647,10 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
          << bestSolution.totalCost << " (penalty: " << bestSolution.totalPenalty << ")" << endl;
     
     int noImprovementCounter = 0;
-    int tabuThreshold = maxGenerations / 10;
+    int noImprovementEvalCounter = 0;
+    int tabuThreshold = data.numCustomers <= 20 ? 
+                        max(100, populationSize * 5) :      // Small instances: trigger early Tabu
+                        max(200, populationSize * 20);      // Large instances: original threshold
     int tabuRounds = 0;
     bool tabuApplied = false;
     int adaptationInterval = max(5, maxGenerations / 20);
@@ -608,12 +661,25 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
         vector<vector<int>> offspring;
         vector<int> crossoverTypes;
         vector<pair<vector<int>, vector<int>>> parentPairs;
+        vector<pair<double, double>> parentFitnesses;  // Track parent fitness for threshold
         
         int numOffspring = populationSize;
         for (int i = 0; i < numOffspring; ++i) {
             vector<int> parent1 = tournamentSelection(population, fitness, 3, rng);
             vector<int> parent2 = tournamentSelection(population, fitness, 3, rng);
             parentPairs.push_back({parent1, parent2});
+            
+            // Find fitness of selected parents (search in population)
+            double fit1 = numeric_limits<double>::infinity();
+            double fit2 = numeric_limits<double>::infinity();
+            for (size_t j = 0; j < population.size(); j++) {
+                if (population[j] == parent1) fit1 = fitness[j];
+                if (population[j] == parent2) fit2 = fitness[j];
+            }
+            // Fallback if not found (shouldn't happen)
+            if (fit1 == numeric_limits<double>::infinity()) fit1 = fitness[0];
+            if (fit2 == numeric_limits<double>::infinity()) fit2 = fitness[0];
+            parentFitnesses.push_back({fit1, fit2});
             
             int crossoverType = adaptiveParams.selectCrossoverType(rng);
             crossoverTypes.push_back(crossoverType);
@@ -667,11 +733,86 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
             adaptiveParams.updateMutationSuccess(mutationType, improved);
         }
         
-        // 2.3: Evaluate offspring
-        vector<double> offspringFitness(offspring.size());
+        // 2.3: Evaluate offspring with quota-based pre-screening (elite + exploration)
+        // Compute adaptive φ = η_current / η_max (η_max = 100)
+        double phi = min(1.0, (double)noImprovementCounter / 100.0);
+        
+        // Get current best cost and compute threshold
+        double currentBestCost = bestSolution.totalCost + bestSolution.totalPenalty;
+        
+        // Threshold = (1 - φ) * z(χ*) + φ * LB(χ*)
+        // Where z(χ*) = best solution cost, LB(χ*) = lower bound estimate
+        vector<double> offspringFitness(offspring.size(), numeric_limits<double>::infinity());
+        int decodedCount = 0;
+        int skippedCount = 0;
+        vector<double> proxyScore(offspring.size(), currentBestCost);
+        vector<int> proxyOrder(offspring.size(), 0);
+        iota(proxyOrder.begin(), proxyOrder.end(), 0);
+
+        // Build cheap proxy score (lower is better).
         for (size_t i = 0; i < offspring.size(); ++i) {
-            PDPSolution sol = decodeAndEvaluate(offspring[i], data);
-            offspringFitness[i] = sol.totalCost + sol.totalPenalty;
+            double lowerBoundEstimate = currentBestCost;
+            if (i < parentFitnesses.size()) {
+                lowerBoundEstimate = min(parentFitnesses[i].first, parentFitnesses[i].second) * 0.98;
+            }
+            // Adaptive threshold still used as a smooth proxy anchor.
+            double threshold = (1.0 - phi) * currentBestCost + phi * lowerBoundEstimate;
+            proxyScore[i] = min(lowerBoundEstimate, threshold);
+        }
+
+        sort(proxyOrder.begin(), proxyOrder.end(),
+             [&proxyScore](int a, int b) { return proxyScore[a] < proxyScore[b]; });
+
+        int eliteDecodeCount = max(1, (int)(offspring.size() * 0.50));
+        int exploreDecodeCount = max(1, (int)(offspring.size() * 0.10));
+        vector<char> shouldDecode(offspring.size(), 0);
+
+        for (int k = 0; k < eliteDecodeCount && k < (int)proxyOrder.size(); ++k) {
+            shouldDecode[proxyOrder[k]] = 1;
+        }
+
+        vector<int> tailIdx;
+        for (int k = eliteDecodeCount; k < (int)proxyOrder.size(); ++k) {
+            tailIdx.push_back(proxyOrder[k]);
+        }
+
+        // Diversity-aware exploration: decode candidates that are most novel vs current best.
+        vector<pair<double, int>> noveltyCandidates;
+        noveltyCandidates.reserve(tailIdx.size());
+        for (int idx : tailIdx) {
+            double novelty = edgeNoveltyScore(offspring[idx], bestSequence);
+            noveltyCandidates.push_back({novelty, idx});
+        }
+        sort(noveltyCandidates.begin(), noveltyCandidates.end(),
+             [](const pair<double, int>& a, const pair<double, int>& b) {
+                 return a.first > b.first;
+             });
+        for (int k = 0; k < exploreDecodeCount && k < (int)noveltyCandidates.size(); ++k) {
+            shouldDecode[noveltyCandidates[k].second] = 1;
+        }
+        
+        for (size_t i = 0; i < offspring.size(); ++i) {
+            if (shouldDecode[i]) {
+                PDPSolution sol = decodeAndEvaluate(offspring[i], data);
+                offspringFitness[i] = sol.totalCost + sol.totalPenalty;
+                surrogate.update(proxyScore[i], offspringFitness[i]);
+                decodedCount++;
+            } else {
+                // Surrogate-assisted estimate for non-decoded offspring.
+                double predicted = surrogate.predict(proxyScore[i], proxyScore[i]);
+                double conservative = max(proxyScore[i], predicted);
+                offspringFitness[i] = conservative * 1.02;
+                skippedCount++;
+            }
+        }
+        
+        if (generation > 0 && generation % 20 == 0) {
+            cout << "[THRESHOLD] Gen " << generation << ": φ=" << fixed << setprecision(3) << phi 
+                 << ", Best=" << setprecision(2) << currentBestCost
+                 << ", Decoded=" << decodedCount << "/" << offspring.size() 
+                 << " (" << (int)(decodedCount*100.0/offspring.size()) << "%)"
+                  << ", Skipped=" << skippedCount
+                  << ", SurrogateSamples=" << surrogate.n << endl;
         }
         
         // 2.4: Selection - 50% best offspring + 20% random offspring + 30% best parents
@@ -725,12 +866,13 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
         fitness = newFitness;
         
         // Update best solution
-        double currentBestCost = bestSolution.totalCost + bestSolution.totalPenalty;
-        if (fitness[0] < currentBestCost) {
+        double currentBestCostAfterSelection = bestSolution.totalCost + bestSolution.totalPenalty;
+        if (fitness[0] < currentBestCostAfterSelection) {
             PDPSolution sol = decodeAndEvaluate(population[0], data);
             bestSolution = sol;
             bestSequence = population[0];
             noImprovementCounter = 0;
+            noImprovementEvalCounter = 0;
             adaptiveParams.noImprovementCount = 0;
             
             cout << "Gen " << generation << ": New best = " << fixed << setprecision(2)
@@ -738,6 +880,7 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
                  << ", mut_rate: " << setprecision(3) << adaptiveParams.currentMutationRate << ")" << endl;
         } else {
             noImprovementCounter++;
+            noImprovementEvalCounter += decodedCount;
             adaptiveParams.noImprovementCount++;
         }
         
@@ -758,10 +901,10 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
         }
         
         // 2.5: Apply Tabu Search to top 5% after stagnation
-        if (noImprovementCounter >= tabuThreshold) {
+        if (noImprovementEvalCounter >= tabuThreshold) {
             int topK = max(1, populationSize / 10); // top 10%
-            cout << "\n[TABU] No improvement for " << tabuThreshold 
-                 << " generations. Applying Tabu Search to top " << topK << " individuals..." << endl;
+            cout << "\n[TABU] No improvement for " << noImprovementEvalCounter
+                 << " decoded evaluations. Applying Tabu Search to top " << topK << " individuals..." << endl;
             
             // Sort population indices by fitness (ascending = best first)
             vector<int> sortedIdx(populationSize);
@@ -872,6 +1015,7 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
             tabuApplied = true;
             tabuRounds++;
             noImprovementCounter = 0;
+            noImprovementEvalCounter = 0;
             
             // Diversity restart: if Tabu didn't improve after 3 rounds, regenerate 80%
             if (tabuRounds >= 3 && bestSolution.totalCost + bestSolution.totalPenalty >= bestBeforeTabu - 0.01) {

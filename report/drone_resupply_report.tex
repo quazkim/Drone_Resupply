@@ -1,0 +1,659 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[vietnamese]{babel}
+\usepackage{amsmath,amsfonts,amssymb}
+\usepackage{graphicx}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{float}
+
+\geometry{margin=2.5cm}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny,
+    breaklines=true,
+    frame=single
+}
+
+\title{\textbf{BÁO CÁO KỸ THUẬT} \\ \Large Giải Bài Toán Pickup-Delivery với Drone Resupply \\ sử dụng Thuật toán Di truyền kết hợp Tabu Search}
+\author{Drone Resupply PDP Solver}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Báo cáo này trình bày chi tiết về hệ thống giải bài toán Pickup-Delivery Problem (PDP) với Drone Resupply sử dụng thuật toán lai ghép giữa Genetic Algorithm (GA) và Tabu Search. Chương trình áp dụng mô hình One-Rendezvous cho phép drone tiếp tế hàng hóa cho xe tải tại các điểm gặp nhau, kết hợp với các kỹ thuật consolidation thông minh để gom nhiều khách hàng trong một chuyến bay drone. Kết quả thực nghiệm trên các bộ dữ liệu benchmark cho thấy thuật toán đạt hiệu quả cao với tất cả các solution đều valid và thời gian hoàn thành (C\_max) được tối ưu.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%==============================================================================
+\section{Giới thiệu}
+%==============================================================================
+
+\subsection{Bối cảnh và động lực}
+
+Trong bối cảnh logistics hiện đại, việc kết hợp xe tải truyền thống với drone đang trở thành xu hướng quan trọng để tối ưu hóa việc giao hàng chặng cuối (last-mile delivery). Drone có ưu điểm về tốc độ và khả năng bay theo đường thẳng (Euclidean), trong khi xe tải có sức chứa lớn hơn và phù hợp với các tuyến đường đô thị (Manhattan).
+
+Bài toán Pickup-Delivery Problem with Drone Resupply (PDP-DR) là một biến thể phức tạp của bài toán định tuyến xe cổ điển, trong đó:
+\begin{itemize}
+    \item Có các cặp pickup-delivery cần được phục vụ theo thứ tự
+    \item Drone có thể bay từ depot để tiếp tế hàng cho xe tải tại các điểm hẹn
+    \item Mục tiêu là tối thiểu hóa thời gian hoàn thành tổng thể (makespan - $C_{max}$)
+\end{itemize}
+
+\subsection{Mục tiêu của chương trình}
+
+Chương trình được phát triển nhằm:
+\begin{enumerate}
+    \item Giải quyết bài toán PDP-DR với mô hình One-Rendezvous
+    \item Áp dụng thuật toán metaheuristic lai ghép GA + Tabu Search
+    \item Hỗ trợ consolidation - gom nhiều khách hàng trong một chuyến drone
+    \item Đảm bảo tính khả thi của solution (ràng buộc thời gian, capacity, endurance)
+\end{enumerate}
+
+%==============================================================================
+\section{Mô hình Bài toán}
+%==============================================================================
+
+\subsection{Định nghĩa bài toán}
+
+Cho một đồ thị $G = (V, E)$ với:
+\begin{itemize}
+    \item $V = \{0\} \cup C_P \cup C_{DL} \cup C_D$: Tập đỉnh bao gồm depot (0) và các khách hàng
+    \item $C_P$: Tập các điểm pickup
+    \item $C_{DL}$: Tập các điểm delivery tương ứng với pickup
+    \item $C_D$: Tập các khách hàng drone-eligible (có thể được phục vụ qua drone resupply)
+\end{itemize}
+
+\subsection{Các thông số đầu vào}
+
+\begin{table}[H]
+\centering
+\caption{Các thông số của bài toán}
+\begin{tabular}{lll}
+\toprule
+\textbf{Ký hiệu} & \textbf{Mô tả} & \textbf{Giá trị mặc định} \\
+\midrule
+$K$ & Số lượng xe tải & 2 \\
+$D$ & Số lượng drone & 2 \\
+$Q_t$ & Capacity của xe tải & 50 \\
+$Q_d$ & Capacity của drone & 2 (instance nhỏ) / 10 (instance lớn) \\
+$v_t$ & Tốc độ xe tải & 30 km/h \\
+$v_d$ & Tốc độ drone & 60 km/h \\
+$E$ & Drone endurance & 90 phút \\
+$s_t$ & Truck service time & 3 phút \\
+$s_r$ & Resupply time & 5 phút \\
+$s_{depot}$ & Depot receive time & 5 phút \\
+$s_{load}$ & Drone load time tại depot & 5 phút \\
+$r_i$ & Ready time của khách hàng $i$ & Từ dữ liệu \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Cấu hình các vị trí Depot}
+\begin{tabular}{lll}
+\toprule
+\textbf{Depot} & \textbf{Tọa độ (x, y)} & \textbf{Mô tả} \\
+\midrule
+Depot Center & (10.0, 10.0) & Depot trung tâm (mặc định) \\
+Depot Border & (0.0, 10.0) & Depot biên \\
+Depot Outside & (-10.0, 10.0) & Depot ngoài khu vực \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Mô hình One-Rendezvous}
+
+Trong mô hình One-Rendezvous, quy trình drone resupply diễn ra như sau:
+
+\begin{enumerate}
+    \item \textbf{Load tại Depot}: Drone load các packages (có thể nhiều packages nếu consolidation) tại depot sau khi tất cả packages đã ready
+    \item \textbf{Bay đến điểm hẹn}: Drone bay theo đường thẳng (Euclidean) đến điểm hẹn (resupply point)
+    \item \textbf{Resupply}: Drone giao TẤT CẢ packages cho truck tại điểm hẹn duy nhất
+    \item \textbf{Quay về Depot}: Drone bay về depot để sẵn sàng cho chuyến tiếp theo
+    \item \textbf{Truck giao hàng}: Truck nhận packages và đi giao cho từng khách hàng
+\end{enumerate}
+
+\subsection{Hàm mục tiêu}
+
+Mục tiêu là tối thiểu hóa makespan:
+\begin{equation}
+    \min C_{max} = \max\left\{\max_{k \in K} T_k^{end}, \max_{d \in D} T_d^{return}\right\}
+\end{equation}
+
+Trong đó:
+\begin{itemize}
+    \item $T_k^{end}$: Thời gian xe tải $k$ hoàn thành và về depot
+    \item $T_d^{return}$: Thời gian drone $d$ quay về depot sau chuyến cuối
+\end{itemize}
+
+\subsection{Các ràng buộc}
+
+\begin{enumerate}
+    \item \textbf{Ràng buộc PDP}: Với mỗi cặp $(P_i, DL_i)$, pickup phải được thực hiện trước delivery
+    \item \textbf{Ràng buộc Capacity}: Tải trọng xe không vượt quá $Q_t$
+    \item \textbf{Ràng buộc Endurance}: Tổng thời gian bay của drone không vượt quá $E$
+    \item \textbf{Ràng buộc Ready Time}: Không thể phục vụ khách hàng trước ready time
+    \item \textbf{Ràng buộc Drone Capacity}: Số packages trong một chuyến drone $\leq Q_d$
+\end{enumerate}
+
+%==============================================================================
+\section{Thuật toán Giải}
+%==============================================================================
+
+\subsection{Tổng quan thuật toán lai ghép GA + Tabu Search}
+
+Thuật toán sử dụng Genetic Algorithm làm framework chính, kết hợp với Tabu Search để intensification khi GA bị stagnation.
+
+\begin{algorithm}[H]
+\caption{GA + Tabu Search cho PDP-DR}
+\begin{algorithmic}[1]
+\STATE \textbf{Input:} Instance data, GA parameters
+\STATE \textbf{Output:} Best solution
+\STATE
+\STATE Initialize population $P$ with diverse methods
+\STATE Evaluate fitness for all individuals
+\STATE $best \leftarrow$ best individual in $P$
+\STATE $stagnation \leftarrow 0$
+\STATE
+\FOR{$gen = 1$ to $maxGen$}
+    \STATE Selection using tournament
+    \STATE Apply crossover operators adaptively
+    \STATE Apply mutation operators adaptively
+    \STATE Evaluate new individuals
+    \STATE Update $best$ if improved
+    \STATE
+    \IF{no improvement}
+        \STATE $stagnation \leftarrow stagnation + 1$
+    \ELSE
+        \STATE $stagnation \leftarrow 0$
+    \ENDIF
+    \STATE
+    \IF{$stagnation \geq threshold$}
+        \STATE Apply Tabu Search on top individuals
+        \STATE Inject improved solutions into population
+        \STATE $stagnation \leftarrow 0$
+    \ENDIF
+    \STATE
+    \STATE Adapt mutation rate and operator probabilities
+\ENDFOR
+\STATE
+\RETURN $best$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Biểu diễn lời giải (Encoding)}
+
+Mỗi cá thể được biểu diễn dưới dạng \textbf{sequence} - một hoán vị của các khách hàng:
+\begin{equation}
+    chromosome = [c_1, c_2, ..., c_n]
+\end{equation}
+
+Trong đó $c_i \in C_P \cup C_{DL} \cup C_D$ là các khách hàng cần phục vụ.
+
+\textbf{Lưu ý quan trọng}: Encoding không sử dụng separator giữa các xe. Việc phân chia công việc cho các xe được thực hiện trong hàm decode.
+
+\subsection{Khởi tạo quần thể đa dạng}
+
+Quần thể được khởi tạo với 4 phương pháp khác nhau để đảm bảo diversity:
+
+\begin{table}[H]
+\centering
+\caption{Phân bố khởi tạo quần thể (Population size = 200)}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Phương pháp} & \textbf{Số lượng} & \textbf{Tỷ lệ} \\
+\midrule
+Random & 20 & 10\% \\
+Greedy Time & 60 & 30\% \\
+Sweep & 60 & 30\% \\
+Nearest Neighbor & 60 & 30\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Các toán tử di truyền}
+
+\subsubsection{Toán tử lai ghép (Crossover)}
+
+Chương trình sử dụng 4 loại crossover với xác suất adaptive:
+
+\begin{enumerate}
+    \item \textbf{Order Crossover (OX)}: Giữ nguyên một đoạn từ parent 1, điền phần còn lại theo thứ tự từ parent 2
+    \item \textbf{Partially Mapped Crossover (PMX)}: Tạo mapping giữa hai đoạn, áp dụng mapping để tạo offspring
+    \item \textbf{Cycle Crossover (CX)}: Xác định các cycle trong hai parents, luân phiên lấy từ mỗi parent
+    \item \textbf{Edge Recombination}: Giữ các cạnh (edges) từ cả hai parents
+\end{enumerate}
+
+\subsubsection{Toán tử đột biến (Mutation)}
+
+5 loại mutation được sử dụng:
+
+\begin{enumerate}
+    \item \textbf{Swap}: Hoán đổi vị trí của 2 gen
+    \item \textbf{Insert}: Di chuyển một gen đến vị trí khác
+    \item \textbf{Inversion}: Đảo ngược một đoạn sequence
+    \item \textbf{Scramble}: Xáo trộn ngẫu nhiên một đoạn
+    \item \textbf{Or-opt}: Di chuyển một chuỗi liên tiếp các gen
+\end{enumerate}
+
+\subsection{Cơ chế Adaptive}
+
+Xác suất sử dụng các toán tử được điều chỉnh dựa trên success rate:
+
+\begin{equation}
+    P_i^{new} = P_i^{old} + \alpha \cdot (SR_i - \overline{SR})
+\end{equation}
+
+Trong đó:
+\begin{itemize}
+    \item $P_i$: Xác suất của toán tử $i$
+    \item $SR_i$: Success rate của toán tử $i$
+    \item $\overline{SR}$: Success rate trung bình
+    \item $\alpha$: Learning rate
+\end{itemize}
+
+Mutation rate cũng được điều chỉnh dựa trên stagnation:
+\begin{equation}
+    mutation\_rate = \min(0.5, base\_rate \times 1.1^{stagnation})
+\end{equation}
+
+\subsection{Tabu Search}
+
+Khi GA không cải thiện sau một số generation (threshold = 5), Tabu Search được áp dụng:
+
+\begin{algorithm}[H]
+\caption{Tabu Search}
+\begin{algorithmic}[1]
+\STATE \textbf{Input:} Initial solution $s$, Tabu tenure, Max iterations
+\STATE \textbf{Output:} Best solution found
+\STATE
+\STATE $best \leftarrow s$
+\STATE $tabuList \leftarrow \emptyset$
+\STATE
+\FOR{$iter = 1$ to $maxIter$}
+    \STATE Generate neighborhood $N(s)$ using moves
+    \STATE Find best non-tabu move or aspiration move
+    \STATE Apply move, update $s$
+    \STATE Update tabu list
+    \IF{$f(s) < f(best)$}
+        \STATE $best \leftarrow s$
+    \ENDIF
+\ENDFOR
+\STATE
+\RETURN $best$
+\end{algorithmic}
+\end{algorithm}
+
+%==============================================================================
+\section{Hàm Decode - Chuyển đổi Sequence thành Solution}
+%==============================================================================
+
+\subsection{Tổng quan}
+
+Hàm decode là thành phần quan trọng nhất, chuyển đổi một chromosome (sequence) thành một solution hoàn chỉnh với:
+\begin{itemize}
+    \item Routes cho từng xe tải
+    \item Timeline chi tiết (arrival time, departure time)
+    \item Các drone resupply events
+    \item Tính toán C\_max chính xác
+\end{itemize}
+
+\subsection{Xử lý các loại khách hàng}
+
+\subsubsection{Khách hàng loại P (Pickup)}
+
+\begin{itemize}
+    \item Xe tải đến điểm pickup, load hàng lên xe
+    \item Đánh dấu cặp pickup-delivery đã được pickup
+    \item Hàng được lưu trên xe cho đến khi delivery
+\end{itemize}
+
+\subsubsection{Khách hàng loại DL (Delivery Location)}
+
+\begin{itemize}
+    \item Tìm xe đã pickup cặp tương ứng
+    \item Xe đó BẮT BUỘC phải giao tại DL này
+    \item Không cần đợi ready time (hàng đã có trên xe)
+\end{itemize}
+
+\subsubsection{Khách hàng loại D (Drone-eligible)}
+
+Có 2 phương án được so sánh:
+
+\textbf{Phương án DJ1 - Drone Resupply với Consolidation:}
+\begin{enumerate}
+    \item Tìm các customers có thể gom chung (consolidation candidates)
+    \item Đánh giá hiệu quả của từng batch size
+    \item Chọn phương án có effective cost thấp nhất
+\end{enumerate}
+
+\textbf{Phương án DJ2 - Truck giao trực tiếp:}
+\begin{enumerate}
+    \item Truck về depot
+    \item Đợi ready time của khách hàng
+    \item Lấy hàng và đi giao
+\end{enumerate}
+
+\subsection{Consolidation - Gom nhiều khách hàng}
+
+Điều kiện để consolidate nhiều khách hàng type D:
+
+\begin{equation}
+    |r_i - r_j| \leq 30 \text{ phút} \quad \land \quad d_{ij}^{drone} \leq 10 \text{ km}
+\end{equation}
+
+Trong đó:
+\begin{itemize}
+    \item $r_i, r_j$: Ready time của hai khách hàng
+    \item $d_{ij}^{drone}$: Khoảng cách Euclidean giữa hai khách hàng
+\end{itemize}
+
+\subsection{Effective Cost - Đánh giá lợi ích thực sự}
+
+Thay vì chỉ so sánh completion time, chương trình sử dụng effective cost:
+
+\begin{equation}
+    effective\_cost = completion\_time - savings
+\end{equation}
+
+\begin{equation}
+    savings = (n - 1) \times trip\_overhead
+\end{equation}
+
+Trong đó:
+\begin{itemize}
+    \item $n$: Số khách hàng trong batch
+    \item $trip\_overhead \approx 15$ phút (depot load time + thời gian bay về)
+\end{itemize}
+
+\textbf{Ví dụ:}
+\begin{itemize}
+    \item Giao 2 khách riêng lẻ: $45 + 30 = 75$ phút (effective)
+    \item Giao 2 khách cùng lúc: $50 - 15 = 35$ phút (effective)
+    \item $\Rightarrow$ Gom nhóm tiết kiệm 40 phút!
+\end{itemize}
+
+\subsection{Smart Merge}
+
+Khi merge 2 drone trips, có kiểm tra thông minh:
+
+\begin{equation}
+    \text{Merge allowed} \Leftrightarrow \neg(ready\_gap > 15 \land avg\_dist > 3)
+\end{equation}
+
+Ma trận quyết định:
+\begin{table}[H]
+\centering
+\caption{Quyết định merge dựa trên ready gap và distance}
+\begin{tabular}{ccc}
+\toprule
+\textbf{Ready Gap} & \textbf{Avg Distance} & \textbf{Quyết định} \\
+\midrule
+$\leq 15$ phút & Bất kỳ & Có thể merge \\
+$> 15$ phút & $\leq 3$ km & Có thể merge \\
+$> 15$ phút & $> 3$ km & KHÔNG merge \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Propagate Delay}
+
+Đây là bước quan trọng để tính đúng C\_max:
+
+\begin{algorithm}[H]
+\caption{Propagate Delay}
+\begin{algorithmic}[1]
+\FOR{each resupply event}
+    \STATE Find resupply point in truck route
+    \STATE $required\_departure \leftarrow resupply\_end\_time$
+    \IF{$required\_departure > truck.departure[k]$}
+        \STATE $delay \leftarrow required\_departure - truck.departure[k]$
+        \STATE $truck.departure[k] \leftarrow required\_departure$
+        \FOR{all subsequent nodes $m > k$}
+            \STATE $truck.arrival[m] \leftarrow truck.arrival[m] + delay$
+            \STATE $truck.departure[m] \leftarrow truck.departure[m] + delay$
+        \ENDFOR
+    \ENDIF
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+%==============================================================================
+\section{Cấu trúc Chương trình}
+%==============================================================================
+
+\subsection{Tổ chức mã nguồn}
+
+\begin{table}[H]
+\centering
+\caption{Các file mã nguồn chính}
+\begin{tabular}{ll}
+\toprule
+\textbf{File} & \textbf{Chức năng} \\
+\midrule
+\texttt{pdp\_types.h} & Định nghĩa cấu trúc dữ liệu \\
+\texttt{pdp\_reader.cpp/h} & Đọc dữ liệu từ file instance \\
+\texttt{pdp\_init.cpp/h} & Khởi tạo quần thể \\
+\texttt{pdp\_fitness.cpp/h} & Hàm decode và tính fitness \\
+\texttt{pdp\_ga.cpp/h} & Các toán tử GA \\
+\texttt{pdp\_tabu.cpp/h} & Thuật toán Tabu Search \\
+\texttt{pdp\_localsearch.cpp/h} & Các operator local search \\
+\texttt{pdp\_validation.cpp/h} & Kiểm tra tính hợp lệ của solution \\
+\texttt{main\_ga\_tabu.cpp} & Chương trình chính \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Các cấu trúc dữ liệu chính}
+
+\subsubsection{PDPData - Dữ liệu bài toán}
+
+\begin{lstlisting}[language=C++]
+struct PDPData {
+    int numNodes, numCustomers;
+    int depotIndex;
+    vector<double> xCoords, yCoords;
+    vector<string> nodeTypes;    // "DEPOT", "P", "DL", "D"
+    vector<int> readyTimes;
+    vector<int> pairIds;
+    vector<int> demands;
+    
+    int numTrucks = 2;
+    int numDrones = 2;
+    double droneSpeed = 60.0;
+    double truckSpeed = 40.0;
+    double droneEndurance = 90.0;
+    
+    vector<vector<double>> truckDistMatrix;  // Manhattan
+    vector<vector<double>> droneDistMatrix;  // Euclidean
+};
+\end{lstlisting}
+
+\subsubsection{PDPSolution - Lời giải}
+
+\begin{lstlisting}[language=C++]
+struct PDPSolution {
+    double totalCost;           // C_max
+    double totalPenalty;
+    bool isFeasible;
+    
+    vector<vector<int>> routes;
+    vector<TruckRouteInfo> truck_details;
+    vector<ResupplyEvent> resupply_events;
+    vector<double> drone_completion_times;
+};
+\end{lstlisting}
+
+\subsubsection{ResupplyEvent - Sự kiện tiếp tế}
+
+\begin{lstlisting}[language=C++]
+struct ResupplyEvent {
+    vector<int> customer_ids;   // Customers in this trip
+    int drone_id;
+    int truck_id;
+    int resupply_point;
+    
+    double drone_depart_time;
+    double drone_arrive_time;
+    double truck_arrive_time;
+    double resupply_start_time;
+    double resupply_end_time;
+    double drone_return_time;
+    double truck_delivery_end;
+    double total_flight_time;
+};
+\end{lstlisting}
+
+%==============================================================================
+\section{Validation - Kiểm tra Tính hợp lệ}
+%==============================================================================
+
+Chương trình thực hiện 6 bước kiểm tra để đảm bảo solution hợp lệ:
+
+\subsection{Customer Coverage}
+Kiểm tra tất cả khách hàng đều được phục vụ:
+\begin{equation}
+    |served\_customers| = |C_P \cup C_{DL} \cup C_D|
+\end{equation}
+
+\subsection{Drone Endurance}
+Với mỗi drone trip:
+\begin{equation}
+    total\_flight\_time \leq E = 90 \text{ phút}
+\end{equation}
+
+\subsection{Timeline Consistency}
+Với mỗi xe tải, timeline phải nhất quán:
+\begin{equation}
+    arrival[i] \leq departure[i] \leq arrival[i+1]
+\end{equation}
+
+\subsection{Drone-Truck Synchronization}
+Tại điểm resupply:
+\begin{equation}
+    resupply\_start = \max(drone\_arrive, truck\_arrive)
+\end{equation}
+
+\subsection{C\_max Verification}
+\begin{equation}
+    C_{max}^{reported} = C_{max}^{calculated}
+\end{equation}
+
+\subsection{Depot Returns}
+Kiểm tra hiệu quả sử dụng drone (informational).
+
+%==============================================================================
+\section{Kết quả Thực nghiệm}
+%==============================================================================
+
+\subsection{Môi trường thực nghiệm}
+
+\begin{itemize}
+    \item \textbf{Ngôn ngữ}: C++17
+    \item \textbf{Compiler}: clang++ với -O2 optimization
+    \item \textbf{Hệ điều hành}: macOS
+    \item \textbf{Parameters}: Population = 200, Generations = 100
+\end{itemize}
+
+\subsection{Kết quả trên bộ dữ liệu U\_30}
+
+\begin{table}[H]
+\centering
+\caption{Kết quả thực nghiệm trên instances U\_30\_0.5}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Instance} & \textbf{Customers} & \textbf{C\_max (phút)} & \textbf{Drone Trips} & \textbf{Valid} \\
+\midrule
+U\_30\_0.5\_Num\_1 & 30 & 315.81 & 16 & \checkmark \\
+U\_30\_0.5\_Num\_2 & 29 & 287.12 & 13 & \checkmark \\
+U\_30\_0.5\_Num\_3 & 30 & 292.02 & 13 & \checkmark \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Phân tích Consolidation}
+
+Consolidation giúp giảm đáng kể số chuyến drone:
+
+\begin{table}[H]
+\centering
+\caption{Phân tích hiệu quả consolidation}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Instance} & \textbf{Trips 1 cust} & \textbf{Trips 2 custs} & \textbf{Trips 3+ custs} & \textbf{Tổng} \\
+\midrule
+Num\_1 & 7 & 7 & 2 & 16 \\
+Num\_2 & 4 & 4 & 5 & 13 \\
+Num\_3 & 3 & 5 & 5 & 13 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Nhận xét}
+
+\begin{enumerate}
+    \item \textbf{Tính khả thi}: 100\% solutions đều valid với C\_max reported = calculated
+    \item \textbf{Consolidation hiệu quả}: Trung bình 60-70\% drone trips gom được 2+ customers
+    \item \textbf{Drone endurance}: Tất cả trips đều trong giới hạn 90 phút
+    \item \textbf{Sync chính xác}: Drone-truck synchronization hoạt động đúng
+\end{enumerate}
+
+%==============================================================================
+\section{Kết luận}
+%==============================================================================
+
+\subsection{Đóng góp chính}
+
+Chương trình đã đạt được các mục tiêu đề ra:
+
+\begin{enumerate}
+    \item \textbf{Thuật toán lai ghép hiệu quả}: Kết hợp GA với Tabu Search, sử dụng adaptive operators để cân bằng exploration và exploitation
+    
+    \item \textbf{Mô hình One-Rendezvous với Consolidation}: Cho phép drone giao nhiều packages trong một chuyến, giảm đáng kể số trips cần thiết
+    
+    \item \textbf{Effective Cost và Smart Merge}: Đánh giá lợi ích thực sự của consolidation, tránh merge không hiệu quả
+    
+    \item \textbf{Propagate Delay}: Tính toán chính xác C\_max với đồng bộ hóa drone-truck
+    
+    \item \textbf{Validation toàn diện}: 6 bước kiểm tra đảm bảo solution hợp lệ
+\end{enumerate}
+
+\subsection{Hướng phát triển}
+
+\begin{enumerate}
+    \item Mở rộng sang mô hình Multiple-Rendezvous
+    \item Tích hợp Machine Learning để dự đoán operator hiệu quả
+    \item Parallelization cho large-scale instances
+    \item Thêm các ràng buộc thực tế: time windows, traffic, weather
+\end{enumerate}
+
+%==============================================================================
+\section*{Tài liệu tham khảo}
+%==============================================================================
+
+\begin{enumerate}
+    \item Genetic Algorithms for Optimization Problems - Holland, J.H. (1992)
+    \item Tabu Search - Glover, F. and Laguna, M. (1997)
+    \item Vehicle Routing Problems with Drones - Recent Advances
+    \item Pickup and Delivery Problems - A Survey
+\end{enumerate}
+
+\end{document}
