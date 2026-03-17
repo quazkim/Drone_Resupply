@@ -233,18 +233,25 @@ class BenchmarkRunner:
         # Load author's results
         milp_df = self._load_milp_results()
         
+        if milp_df.empty:
+            print("⚠️  Warning: No MILP reference data found. Skipping comparison.")
+            return
+        
         # Convert our results to DataFrame
         our_df = pd.DataFrame([r.to_dict() for r in self.results])
         
         # Merge and compute gaps
         comparison = []
+        matches_found = 0
+        mismatches = 0
         
         for _, our_row in our_df.iterrows():
-            # Find matching MILP result
+            # Find matching MILP result - MUST include depot location!
             milp_row = milp_df[
                 (milp_df['Customers'] == our_row['Customers']) &
                 (milp_df['Instance'] == our_row['Instance']) &
-                (milp_df['Beta'] == our_row['Beta'])
+                (milp_df['Beta'] == our_row['Beta']) &
+                (milp_df['Depot location'] == our_row['Depot Location'])  # FIX: Match depot!
             ]
             
             comp_row = our_row.to_dict()
@@ -252,6 +259,7 @@ class BenchmarkRunner:
             if not milp_row.empty:
                 milp_obj = milp_row.iloc[0]['Objective value']
                 comp_row['MILP Objective'] = milp_obj
+                matches_found += 1
                 
                 if our_row['Objective Value']:
                     gap = ((our_row['Objective Value'] - milp_obj) / milp_obj) * 100
@@ -261,6 +269,7 @@ class BenchmarkRunner:
             else:
                 comp_row['MILP Objective'] = None
                 comp_row['Gap to MILP (%)'] = None
+                mismatches += 1
             
             comparison.append(comp_row)
         
@@ -274,11 +283,16 @@ class BenchmarkRunner:
         print(f"Total instances: {len(our_df)}")
         print(f"Feasible: {our_df['Feasible'].sum()}")
         print(f"Avg runtime: {our_df['Runtime (s)'].mean():.2f}s")
+        print(f"\nReference Data Matching:")
+        print(f"  Matched with MILP: {matches_found}")
+        print(f"  Not found in reference: {mismatches}")
         
         comp_df_clean = comp_df.dropna(subset=['Gap to MILP (%)'])
         if len(comp_df_clean) > 0:
-            print(f"Avg gap to MILP: {comp_df_clean['Gap to MILP (%)'].mean():.2f}%")
-            print(f"Max gap to MILP: {comp_df_clean['Gap to MILP (%)'].max():.2f}%")
+            print(f"\nGap Analysis:")
+            print(f"  Avg gap to MILP: {comp_df_clean['Gap to MILP (%)'].mean():.2f}%")
+            print(f"  Max gap to MILP: {comp_df_clean['Gap to MILP (%)'].max():.2f}%")
+            print(f"  Min gap to MILP: {comp_df_clean['Gap to MILP (%)'].min():.2f}%")
     
     def _load_milp_results(self) -> pd.DataFrame:
         """Load MILP results from reference CSV"""
@@ -286,13 +300,8 @@ class BenchmarkRunner:
         
         if milp_file.exists():
             df = pd.read_csv(milp_file)
-            # Rename columns to match our output
-            df = df.rename(columns={
-                'Customers': 'Customers',
-                'Instance': 'Instance',
-                'Beta': 'Beta',
-                'Objective value': 'Objective value'
-            })
+            # Ensure columns are present for matching
+            # Expected columns: Customers, Depot location, Instance, Beta, Objective value
             return df
         
         return pd.DataFrame()
