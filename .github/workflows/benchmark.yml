@@ -42,6 +42,21 @@ jobs:
           pip3 install pandas --quiet
           echo "✓ Dependencies installed"
 
+      - name: Check compiler
+        run: |
+          echo "Checking compiler..."
+          clang++ --version
+          echo "---"
+          which clang++
+
+      - name: Verify source files
+        run: |
+          echo "Checking source files..."
+          ls -lah src/*.cpp
+          echo "---"
+          echo "Checking Makefile..."
+          cat Makefile
+
       - name: Build solver
         run: |
           cd ${{ env.BUILD_DIR }}
