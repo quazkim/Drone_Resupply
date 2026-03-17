@@ -1,0 +1,42 @@
+{
+    "Status": "time limit exceeded",
+    "Objective": 119.99999998600013,
+    "Trucks": [
+        [
+            0,
+            9,
+            2,
+            1,
+            4,
+            3,
+            5,
+            0
+        ],
+        [
+            0,
+            7,
+            6,
+            8,
+            10,
+            0
+        ]
+    ],
+    "Drones": [
+        [
+            0,
+            9,
+            0
+        ],
+        [
+            0
+        ]
+    ],
+    "Transfer": [
+        {
+            "drone": 0,
+            "truck": 0,
+            "location": 9,
+            "customer": 9
+        }
+    ]
+}

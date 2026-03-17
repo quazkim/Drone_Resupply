@@ -1,0 +1,57 @@
+name: PDP GA+Tabu Parameterized Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      maxGenerations:
+        description: 'Max generations for GA'
+        required: true
+        default: '100'
+      populationSize:
+        description: 'Population size for GA'
+        required: true
+        default: '50'
+      tabuIter:
+        description: 'Tabu iterations'
+        required: true
+        default: '100'
+      localSearchIter:
+        description: 'Local search iterations'
+        required: true
+        default: '50'
+      instanceFolder:
+        description: 'Folder containing instances'
+        required: true
+        default: 'instance2'
+      runCount:
+        description: 'Number of runs per instance'
+        required: true
+        default: '1'
+
+jobs:
+  run-ga-tabu:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup g++
+        run: sudo apt-get install -y g++
+
+      - name: Build PDP solver
+        run: |
+          g++ -std=c++17 -O2 -o pdp_solver main_ga_tabu.cpp pdp_ga.cpp pdp_tabu.cpp pdp_fitness.cpp pdp_reader.cpp pdp_utils.cpp pdp_init.cpp
+
+      - name: Run all instances
+        run: |
+          for file in ${{ github.event.inputs.instanceFolder }}/*.txt; do
+            for run in $(seq 1 ${{ github.event.inputs.runCount }}); do
+              ./pdp_solver "$file" ${{ github.event.inputs.populationSize }} ${{ github.event.inputs.maxGenerations }} 0.1 $run > "results/$(basename "$file")_run${run}.log"
+            done
+          done
+
+      - name: Upload results
+        uses: actions/upload-artifact@v3
+        with:
+          name: pdp-results
+          path: results/

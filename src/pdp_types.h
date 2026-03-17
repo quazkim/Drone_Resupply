@@ -36,7 +36,8 @@ struct PDPData {
     // === DEPOT CONFIGURATION ===
     pair<double, double> depotCenter = {10.0, 10.0};  // Center depot coordinates (primary resupply point)
     pair<double, double> depotBorder = {0.0, 10.0};   // Border depot coordinates (alternative resupply point)
-    bool useDepotCenter = true;                        // Selection flag: true=center, false=border
+    pair<double, double> depotOutside = {-10.0, 10.0};  // Outside depot coordinates (peripheral resupply point)
+    int depotMode = 0;                                 // Depot selection: 0=center, 1=border, 2=outside
 
     // === CUSTOMER DEMAND ===
     vector<int> demands;                        // Demand/payload weight for each customer (kg/units)

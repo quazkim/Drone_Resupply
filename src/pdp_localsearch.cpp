@@ -97,6 +97,7 @@ string IntegratedLocalSearch::getOperatorName(OperatorType op) const {
         case OperatorType::DRONE_SWAP: return "Drone-Swap";
         case OperatorType::DRONE_MOVE: return "Drone-Move";
         case OperatorType::DRONE_MERGE: return "Drone-Merge";
+        case OperatorType::DRONE_CONSOLIDATE: return "Drone-Consolidate";
         case OperatorType::DRONE_SPLIT: return "Drone-Split";
         case OperatorType::DRONE_REASSIGN: return "Drone-Reassign";
         case OperatorType::DRONE_INSERT_INTO_TRIP: return "Drone-InsertIntoTrip";
@@ -1135,6 +1136,70 @@ bool IntegratedLocalSearch::droneReorderTrip(PDPSolution& sol) {
     return improved;
 }
 
+// ============ DRONE CONSOLIDATION OPTIMIZATION ============
+
+/**
+ * @brief Optimize drone consolidation: merge small trips to reduce sorties and makespan
+ * Gom nhung trips nho thanh trips lon hon de giam so luong sorties va makespan
+ */
+bool IntegratedLocalSearch::optimizeDroneConsolidation(PDPSolution& sol) {
+    if (sol.resupply_events.size() < 2) return false;
+    
+    bool improved = false;
+    double best_cmax = calculateCmax(sol);
+    
+    // Try to merge pairs of trips serving the same truck
+    for (size_t i = 0; i < sol.resupply_events.size(); ++i) {
+        for (size_t j = i + 1; j < sol.resupply_events.size(); ++j) {
+            auto& event1 = sol.resupply_events[i];
+            auto& event2 = sol.resupply_events[j];
+            
+            // Only merge if serving the same truck (consolidate for that truck)
+            if (event1.truck_id != event2.truck_id) continue;
+            
+            // Check combined capacity
+            int combined_orders = event1.customer_ids.size() + event2.customer_ids.size();
+            if (combined_orders > (int)data.droneCapacity) continue;
+            
+            // Create merged event
+            ResupplyEvent merged = event1;
+            merged.customer_ids.insert(merged.customer_ids.end(),
+                                      event2.customer_ids.begin(),
+                                      event2.customer_ids.end());
+            
+            // Check feasibility
+            if (!isDroneTripFeasible(merged, sol)) continue;
+            
+            // Test merge by temporarily modifying solution
+            vector<int> saved_event1 = event1.customer_ids;
+            vector<int> saved_event2 = event2.customer_ids;
+            
+            event1.customer_ids = merged.customer_ids;
+            
+            recalculateDroneTimes(sol);
+            double new_cmax = calculateCmax(sol);
+            
+            if (new_cmax < best_cmax - 0.01) {
+                // Keep the merge
+                sol.resupply_events.erase(sol.resupply_events.begin() + j);
+                best_cmax = new_cmax;
+                improved = true;
+                // Re-index and continue
+                if (i > 0) i--;
+                break;
+            } else {
+                // Revert
+                event1.customer_ids = saved_event1;
+                event2.customer_ids = saved_event2;
+                recalculateDroneTimes(sol);
+            }
+        }
+        if (improved) break;  // Restart after successful merge
+    }
+    
+    return improved;
+}
+
 // ============ CROSS TRUCK-DRONE OPERATORS ============
 // ============ PERTURBATION ============
 
@@ -1284,6 +1349,7 @@ bool IntegratedLocalSearch::optimizeDroneTrips(PDPSolution& sol) {
         OperatorType::DRONE_SWAP,
         OperatorType::DRONE_MOVE,
         OperatorType::DRONE_MERGE,
+        OperatorType::DRONE_CONSOLIDATE,  // NEW: Consolidation operator
         OperatorType::DRONE_SPLIT,
         OperatorType::DRONE_REASSIGN,
         OperatorType::DRONE_INSERT_INTO_TRIP
@@ -1309,6 +1375,9 @@ bool IntegratedLocalSearch::optimizeDroneTrips(PDPSolution& sol) {
             break;
         case OperatorType::DRONE_MERGE:
             op_success = droneMergeTrips(candidate);
+            break;
+        case OperatorType::DRONE_CONSOLIDATE:
+            op_success = optimizeDroneConsolidation(candidate);
             break;
         case OperatorType::DRONE_SPLIT:
             op_success = droneSplitTrip(candidate);

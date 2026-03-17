@@ -57,8 +57,10 @@ bool readPDPFile(const string& filename, PDPData& data) {
     getline(file, line); 
     cout << "Reading: " << filename << endl;
     
-    // Clear data
+    // Clear data but preserve depotMode
+    int saved_depotMode = data.depotMode;
     data = PDPData(); 
+    data.depotMode = saved_depotMode;  // Restore it after reset 
     
     vector<pair<double, double>> tempCoords;
     vector<string> tempTypes;
@@ -84,7 +86,16 @@ bool readPDPFile(const string& filename, PDPData& data) {
     file.close();
     
     // B╞»ß╗ÜC 1: X├üC ─Éß╗èNH V├Ç CH├êN DEPOT V├ÇO NODE 0 (0-BASED)
-    data.coordinates.push_back(data.useDepotCenter ? data.depotCenter : data.depotBorder);
+    pair<double, double> selectedDepot;
+    if (data.depotMode == 1) {
+        selectedDepot = data.depotBorder;
+    } else if (data.depotMode == 2) {
+        selectedDepot = data.depotOutside;
+    } else {
+        selectedDepot = data.depotCenter;  // default: mode 0
+    }
+    
+    data.coordinates.push_back(selectedDepot);
     data.nodeTypes.push_back("D");
     data.readyTimes.push_back(0);
     data.pairIds.push_back(0);

@@ -19,15 +19,21 @@ int main(int argc, char* argv[]) {
     auto startTotal = chrono::high_resolution_clock::now();
     
     // Configuration parameters - modify these values directly
-    const int POPULATION_SIZE = 200;
-    const int MAX_GENERATIONS = 500;
-    const double MUTATION_RATE = 0.1;
+    const int POPULATION_SIZE = 200;       // Balanced: quality vs speed
+    const int MAX_GENERATIONS = 500;       // Standard iterations
+    const double MUTATION_RATE = 0.15;     // Slightly higher diversity
     const int RUN_NUMBER = 1;
     
     if (argc < 2) {
-        cerr << "Usage: " << argv[0] << " <instance_file> [--depot x,y]" << endl;
-        cerr << "Example: " << argv[0] << " Instance/U_10_0.5_Num_1.txt" << endl;
-        cerr << "         " << argv[0] << " Instance/U_30_0.5_Num_1.txt --depot -10,10" << endl;
+        cerr << "Usage: " << argv[0] << " <instance_file> [--depot MODE]" << endl;
+        cerr << "Depot modes:" << endl;
+        cerr << "  0 = center (default)" << endl;
+        cerr << "  1 = border" << endl;
+        cerr << "  2 = outside" << endl;
+        cerr << "Examples:" << endl;
+        cerr << "  " << argv[0] << " Instance/U_10_0.5_Num_1.txt" << endl;
+        cerr << "  " << argv[0] << " Instance/U_30_0.5_Num_1.txt --depot 1" << endl;
+        cerr << "  " << argv[0] << " Instance/U_50_1.0_Num_1.txt --depot 2" << endl;
         cerr << "\nCurrent parameters (edit in main_ga_tabu.cpp):" << endl;
         cerr << "  Population Size: " << POPULATION_SIZE << endl;
         cerr << "  Max Generations: " << MAX_GENERATIONS << endl;
@@ -41,18 +47,17 @@ int main(int argc, char* argv[]) {
     double mutationRate = MUTATION_RATE;
     int runNumber = RUN_NUMBER;
     
-    // Parse optional --depot x,y argument
-    double customDepotX = 10.0, customDepotY = 10.0;
-    bool hasCustomDepot = false;
+    // Parse optional --depot MODE argument (0=center, 1=border, 2=outside)
+    int depotMode = 0;  // default: center
     for (int i = 2; i < argc; i++) {
         string arg = argv[i];
         if (arg == "--depot" && i + 1 < argc) {
-            string coords = argv[i + 1];
-            // Replace comma with space for parsing
-            for (char& ch : coords) if (ch == ',') ch = ' ';
-            istringstream css(coords);
-            if (css >> customDepotX >> customDepotY) {
-                hasCustomDepot = true;
+            istringstream modeStream(argv[i + 1]);
+            if (modeStream >> depotMode && depotMode >= 0 && depotMode <= 2) {
+                // valid mode
+            } else {
+                cerr << "Error: --depot MODE must be 0 (center), 1 (border), or 2 (outside)" << endl;
+                return 1;
             }
             i++;
         }
@@ -65,11 +70,10 @@ int main(int argc, char* argv[]) {
     // Read instance
     cout << "\nReading instance: " << instanceFile << endl;
     PDPData data;
-    if (hasCustomDepot) {
-        data.depotCenter = {customDepotX, customDepotY};
-        data.useDepotCenter = true;
-        cout << "Using custom depot: (" << customDepotX << ", " << customDepotY << ")" << endl;
-    }
+    data.depotMode = depotMode;
+    string depotName[] = {"center", "border", "outside"};
+    cout << "Using depot: " << depotName[depotMode] << endl;
+    
     if (!readPDPFile(instanceFile, data)) {
         cerr << "Error: Failed to read instance file!" << endl;
         return 1;
