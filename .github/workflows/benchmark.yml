@@ -1,0 +1,218 @@
+name: Benchmark - GA+Tabu vs MILP/Matheuristic
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - '.github/workflows/benchmark.yml'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual trigger
+    inputs:
+      test_mode:
+        description: 'Run mode (quick-test or full-benchmark)'
+        required: true
+        default: 'quick-test'
+        type: choice
+        options:
+          - quick-test
+          - full-benchmark
+
+env:
+  BUILD_DIR: ${{ github.workspace }}
+  RESULTS_DIR: ${{ github.workspace }}/results
+
+jobs:
+  build:
+    runs-on: macos-latest
+    name: Build & Benchmark
+    
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup environment
+        run: |
+          echo "Build timestamp: $(date)"
+          mkdir -p ${{ env.RESULTS_DIR }}
+
+      - name: Build solver
+        run: |
+          cd ${{ env.BUILD_DIR }}
+          make clean
+          make
+          if [ ! -f main_ga_tabu ]; then
+            echo "Build failed!"
+            exit 1
+          fi
+          echo "✓ Build successful"
+
+      - name: Run quick benchmark (10-15 customers)
+        if: ${{ github.event.inputs.test_mode != 'full-benchmark' }}
+        run: |
+          cd ${{ env.BUILD_DIR }}
+          python3 scripts/run_benchmarks.py --max-customers 15 --sample-size 30
+
+      - name: Run full benchmark
+        if: ${{ github.event.inputs.test_mode == 'full-benchmark' }}
+        run: |
+          cd ${{ env.BUILD_DIR }}
+          python3 scripts/run_benchmarks.py
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: benchmark-results
+          path: ${{ env.RESULTS_DIR }}/*
+          retention-days: 30
+
+      - name: Generate report
+        if: always()
+        run: |
+          cd ${{ env.BUILD_DIR }}
+          python3 << 'EOF'
+          import os
+          import glob
+          from pathlib import Path
+          
+          results_dir = Path("${{ env.RESULTS_DIR }}")
+          
+          # Find latest comparison file
+          comp_files = sorted(results_dir.glob("comparison_*.csv"))
+          if comp_files:
+              latest = comp_files[-1]
+              print(f"\n=== Latest Comparison Results ===")
+              print(f"File: {latest.name}")
+              
+              with open(latest) as f:
+                  lines = f.readlines()
+                  # Print header
+                  print(lines[0].strip())
+                  
+                  # Print first 10 rows
+                  for line in lines[1:11]:
+                      print(line.strip())
+                  
+                  if len(lines) > 11:
+                      print(f"... ({len(lines)-1} total rows)")
+          EOF
+
+      - name: Comment PR with results
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Find latest comparison file
+            const resultsDir = '${{ env.RESULTS_DIR }}';
+            const files = fs.readdirSync(resultsDir)
+              .filter(f => f.startsWith('comparison_'))
+              .sort()
+              .reverse();
+            
+            if (files.length === 0) {
+              console.log('No results found');
+              return;
+            }
+            
+            const latestFile = path.join(resultsDir, files[0]);
+            const content = fs.readFileSync(latestFile, 'utf8');
+            const lines = content.split('\n');
+            
+            let table = '| ' + lines[0].replace(/,/g, ' | ') + ' |\n';
+            table += '|' + lines[0].split(',').map(() => ' --- |').join('') + '\n';
+            
+            for (let i = 1; i < Math.min(11, lines.length); i++) {
+              if (lines[i].trim()) {
+                table += '| ' + lines[i].replace(/,/g, ' | ') + ' |\n';
+              }
+            }
+            
+            const comment = `## Benchmark Results\n\n${table}\n\n📊 Full results available in [artifacts](${context.payload.pull_request.html_url}/checks)`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+      - name: Cleanup
+        if: always()
+        run: |
+          cd ${{ env.BUILD_DIR }}
+          make clean
+          echo "✓ Cleanup complete"
+
+  performance:
+    runs-on: macos-latest
+    name: Performance Analysis
+    needs: build
+    if: github.event.inputs.test_mode == 'full-benchmark' || github.ref == 'refs/heads/main'
+    
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download results
+        uses: actions/download-artifact@v3
+        with:
+          name: benchmark-results
+
+      - name: Analyze performance trends
+        run: |
+          python3 << 'EOF'
+          import pandas as pd
+          import glob
+          
+          # Load latest results
+          comp_files = sorted(glob.glob("comparison_*.csv"))
+          if not comp_files:
+              print("No results found")
+              exit(1)
+          
+          df = pd.read_csv(comp_files[-1])
+          
+          print("\n=== PERFORMANCE ANALYSIS ===\n")
+          
+          # Group by customer count
+          if 'Customers' in df.columns:
+              by_customers = df.groupby('Customers').agg({
+                  'Objective Value': ['mean', 'std'],
+                  'Runtime (s)': ['mean', 'max'],
+                  'Gap to MILP (%)': 'mean'
+              })
+              print("Performance by Problem Size:")
+              print(by_customers)
+          
+          # Group by depot location
+          if 'Depot Location' in df.columns:
+              by_depot = df.groupby('Depot Location').agg({
+                  'Objective Value': 'mean',
+                  'Runtime (s)': 'mean',
+                  'Gap to MILP (%)': 'mean'
+              })
+              print("\nPerformance by Depot Location:")
+              print(by_depot)
+          
+          # Group by beta
+          if 'Beta' in df.columns:
+              by_beta = df.groupby('Beta').agg({
+                  'Objective Value': 'mean',
+                  'Runtime (s)': 'mean',
+                  'Gap to MILP (%)': 'mean'
+              })
+              print("\nPerformance by Beta:")
+              print(by_beta)
+          EOF
+
+      - name: Upload analysis
+        uses: actions/upload-artifact@v3
+        with:
+          name: performance-analysis
+          path: ${{ env.RESULTS_DIR }}/*
