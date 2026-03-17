@@ -1,5 +1,6 @@
 ﻿#include "pdp_tabu.h"
 #include "pdp_fitness.h"
+#include "pdp_cache.h"
 #include <algorithm>
 #include <random>
 #include <iostream>
@@ -17,8 +18,8 @@ string TabuMove::key() const {
 
 // ============ TABU SEARCH CLASS ============
 
-TabuSearchPDP::TabuSearchPDP(const PDPData& data, int maxIterations)
-    : data(data), maxIterations(maxIterations) {
+TabuSearchPDP::TabuSearchPDP(const PDPData& data, int maxIterations, SolutionCache& cache)
+    : data(data), maxIterations(maxIterations), cache(cache) {
     int n = data.numCustomers;
     double k = 0.2;  // 20% of customers
     int r = 10;      // random range
@@ -156,7 +157,7 @@ bool TabuSearchPDP::findBestSwapMove(const vector<int>& currentSeq, double curre
             bool isTabuMove = isTabu(move, iter);
             
             vector<int> candidate = applyMove(currentSeq, move);
-            PDPSolution candidateSol = decodeAndEvaluate(candidate, data);
+            PDPSolution candidateSol = evaluateWithCache(candidate, data, cache);
             double candidateCost = candidateSol.totalCost + candidateSol.totalPenalty;
             double delta = candidateCost - currentCost;
             
@@ -197,7 +198,7 @@ bool TabuSearchPDP::findBestInsertMove(const vector<int>& currentSeq, double cur
         bool isTabuMove = isTabu(move, iter);
         
         vector<int> candidate = applyMove(currentSeq, move);
-        PDPSolution candidateSol = decodeAndEvaluate(candidate, data);
+        PDPSolution candidateSol = evaluateWithCache(candidate, data, cache);
         double candidateCost = candidateSol.totalCost + candidateSol.totalPenalty;
         double delta = candidateCost - currentCost;
         
@@ -227,7 +228,7 @@ bool TabuSearchPDP::findBest2OptMove(const vector<int>& currentSeq, double curre
             bool isTabuMove = isTabu(move, iter);
             
             vector<int> candidate = applyMove(currentSeq, move);
-            PDPSolution candidateSol = decodeAndEvaluate(candidate, data);
+            PDPSolution candidateSol = evaluateWithCache(candidate, data, cache);
             double candidateCost = candidateSol.totalCost + candidateSol.totalPenalty;
             double delta = candidateCost - currentCost;
             
@@ -258,7 +259,7 @@ bool TabuSearchPDP::findBest2OptStarMove(const vector<int>& currentSeq, double c
             bool isTabuMove = isTabu(move, iter);
             
             vector<int> candidate = applyMove(currentSeq, move);
-            PDPSolution candidateSol = decodeAndEvaluate(candidate, data);
+            PDPSolution candidateSol = evaluateWithCache(candidate, data, cache);
             double candidateCost = candidateSol.totalCost + candidateSol.totalPenalty;
             double delta = candidateCost - currentCost;
             
@@ -294,7 +295,7 @@ bool TabuSearchPDP::findBestOrOptMove(const vector<int>& currentSeq, double curr
                 bool isTabuMove = isTabu(move, iter);
                 
                 vector<int> candidate = applyMove(currentSeq, move);
-                PDPSolution candidateSol = decodeAndEvaluate(candidate, data);
+                PDPSolution candidateSol = evaluateWithCache(candidate, data, cache);
                 double candidateCost = candidateSol.totalCost + candidateSol.totalPenalty;
                 double delta = candidateCost - currentCost;
                 
@@ -329,7 +330,7 @@ bool TabuSearchPDP::findBestRelocatePairMove(const vector<int>& currentSeq, doub
             bool isTabuMove = isTabu(move, iter);
             
             vector<int> candidate = applyMove(currentSeq, move);
-            PDPSolution candidateSol = decodeAndEvaluate(candidate, data);
+            PDPSolution candidateSol = evaluateWithCache(candidate, data, cache);
             double candidateCost = candidateSol.totalCost + candidateSol.totalPenalty;
             double delta = candidateCost - currentCost;
             
@@ -353,7 +354,7 @@ vector<int> TabuSearchPDP::run(const vector<int>& initialSeq) {
     vector<int> currentSeq = initialSeq;
     vector<int> bestSeq = initialSeq;
     
-    PDPSolution currentSol = decodeAndEvaluate(currentSeq, data);
+    PDPSolution currentSol = evaluateWithCache(currentSeq, data, cache);
     PDPSolution bestSol = currentSol;
     double currentCost = currentSol.totalCost + currentSol.totalPenalty;
     double bestCost = currentCost;
@@ -361,7 +362,7 @@ vector<int> TabuSearchPDP::run(const vector<int>& initialSeq) {
     const double delta1 = 0.5, delta2 = 0.3, delta3 = 0.2;
     int segmentLength = 100;
     int noImprovement = 0;
-    const int maxNoImprovement = min(50, maxIterations / 2);
+    const int maxNoImprovement = min(5000, maxIterations / 2);
     
     for (int iter = 0; iter < maxIterations; ++iter) {
         // Select move type using adaptive weights
@@ -405,7 +406,7 @@ vector<int> TabuSearchPDP::run(const vector<int>& initialSeq) {
             double previousCost = currentCost;
             currentSeq = bestCandidate;
             
-            PDPSolution newSol = decodeAndEvaluate(currentSeq, data);
+            PDPSolution newSol = evaluateWithCache(currentSeq, data, cache);
             currentCost = newSol.totalCost + newSol.totalPenalty;
             currentSol = newSol;
             
@@ -452,7 +453,8 @@ vector<int> TabuSearchPDP::run(const vector<int>& initialSeq) {
 
 // ============ SIMPLE INTERFACE ============
 
-vector<int> tabuSearchPDP(const vector<int>& initialSeq, const PDPData& data, int maxIterations) {
-    TabuSearchPDP tabu(data, maxIterations);
+vector<int> tabuSearchPDP(const vector<int>& initialSeq, const PDPData& data, 
+                          int maxIterations, SolutionCache& cache) {
+    TabuSearchPDP tabu(data, maxIterations, cache);
     return tabu.run(initialSeq);
 }

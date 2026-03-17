@@ -32,6 +32,7 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data,
                                int populationSize,
                                int maxGenerations,
                                double mutationRate,
-                               int runNumber);
+                               int runNumber,
+                               bool isSmallScale = false);
 
 #endif // PDP_GA_H

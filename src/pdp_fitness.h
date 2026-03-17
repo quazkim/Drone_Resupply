@@ -2,6 +2,7 @@
 #define PDP_FITNESS_H
 
 #include "pdp_types.h"
+#include "pdp_cache.h"
 #include <vector>
 
 /**
@@ -25,6 +26,28 @@
  *   - resupply_events: All drone missions executed
  */
 PDPSolution decodeAndEvaluate(const std::vector<int>& seq, const PDPData& data);
+
+/**
+ * @brief Wrapper function for decodeAndEvaluate with solution caching.
+ * 
+ * Checks cache first (O(1) lookup). If sequence is found, returns cached solution.
+ * Otherwise, calls decodeAndEvaluate, stores result in cache, and returns.
+ * 
+ * Usage:
+ *   SolutionCache cache;
+ *   PDPSolution sol = evaluateWithCache(population[i], data, cache);
+ * 
+ * @param seq Customer sequence (cache key)
+ * @param data PDP instance
+ * @param cache Reference to SolutionCache object maintaining state across evals
+ * 
+ * @return PDPSolution with all details (truck_details, resupply_events accessible for post-processing)
+ */
+PDPSolution evaluateWithCache(
+    const std::vector<int>& seq,
+    const PDPData& data,
+    SolutionCache& cache
+);
 
 // Assignment encoding for Local Search post-processing
 struct AssignmentEncoding {
@@ -50,7 +73,7 @@ PDPSolution runAssignmentLS(
 inline PDPSolution assignmentLSPostProcess(const std::vector<int>& seq, const PDPData& data) {
     PDPSolution sol = decodeAndEvaluate(seq, data);
     AssignmentEncoding enc = initFromSolution(seq, sol, data);
-    PDPSolution ls_sol = runAssignmentLS(seq, enc, data, 200);
+    PDPSolution ls_sol = runAssignmentLS(seq, enc, data, 2000);
     double ls_cost = ls_sol.totalCost + ls_sol.totalPenalty * 1000.0;
     double cur_cost = sol.totalCost + sol.totalPenalty * 1000.0;
     return (ls_cost < cur_cost - 0.01) ? ls_sol : sol;

@@ -2,6 +2,7 @@
 #define PDP_TABU_H
 
 #include "pdp_types.h"
+#include "pdp_cache.h"
 #include <vector>
 #include <string>
 #include <map>
@@ -17,7 +18,7 @@ struct TabuMove {
 
 class TabuSearchPDP {
 public:
-    TabuSearchPDP(const PDPData& data, int maxIterations);
+    TabuSearchPDP(const PDPData& data, int maxIterations, SolutionCache& cache);
     
     // Main tabu search
     std::vector<int> run(const std::vector<int>& initialSeq);
@@ -27,6 +28,7 @@ private:
     int maxIterations;
     int tabuTenure;
     std::map<std::string, int> tabuList;
+    SolutionCache& cache;  // Reference to shared solution cache
     
     // Adaptive weights for move selection
     std::vector<double> weights;
@@ -73,6 +75,7 @@ private:
 // Simple interface function
 std::vector<int> tabuSearchPDP(const std::vector<int>& initialSeq,
                                const PDPData& data,
-                               int maxIterations);
+                               int maxIterations,
+                               SolutionCache& cache);
 
 #endif // PDP_TABU_H

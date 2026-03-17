@@ -2,6 +2,7 @@
 #include <string>
 #include <sstream>
 #include <iomanip>
+#include <chrono>
 #include "pdp_types.h"
 #include "pdp_reader.h"
 #include "pdp_utils.h"
@@ -14,6 +15,9 @@
 using namespace std;
 
 int main(int argc, char* argv[]) {
+    // Start total timer
+    auto startTotal = chrono::high_resolution_clock::now();
+    
     // Configuration parameters - modify these values directly
     const int POPULATION_SIZE = 200;
     const int MAX_GENERATIONS = 500;
@@ -79,8 +83,17 @@ int main(int argc, char* argv[]) {
     cout << "  Depot: (" << data.coordinates[data.depotIndex].first 
          << ", " << data.coordinates[data.depotIndex].second << ")" << endl;
     
+    // Detect scale
+    const int TOTAL_NODES = data.numCustomers + 1;  // +1 for depot
+    bool isSmallScale = (TOTAL_NODES <= 15);
+    if (isSmallScale) {
+        populationSize = 40;
+        maxGenerations = 30;
+        cout << "\n[SCALE DETECTION] Small scale mode (nodes <= 15)" << endl;
+    }
+    
     // Run GA + Tabu
-    PDPSolution solution = geneticAlgorithmPDP(data, populationSize, maxGenerations, mutationRate, runNumber);
+    PDPSolution solution = geneticAlgorithmPDP(data, populationSize, maxGenerations, mutationRate, runNumber, isSmallScale);
     
     double costBeforeLS = solution.totalCost;
     
@@ -107,6 +120,12 @@ int main(int argc, char* argv[]) {
     cout << "\n=========================================\n";
     cout << "Cost before Local Search: " << fixed << setprecision(2) << costBeforeLS << " minutes\n";
     cout << "=========================================\n";
+    
+    // End total timer and print
+    auto endTotal = chrono::high_resolution_clock::now();
+    double totalTimeSec = chrono::duration<double>(endTotal - startTotal).count();
+    
+    cout << "\n[TOTAL RUNTIME] " << fixed << setprecision(2) << totalTimeSec << " seconds\n" << endl;
 
     return 0;
 }
