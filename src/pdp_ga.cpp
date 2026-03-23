@@ -607,8 +607,7 @@ bool evaluateMutationImprovement(const vector<int>& mutated, const vector<int>& 
 // ============ MAIN GA ALGORITHM ============
 
 PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize, 
-                               int maxGenerations, double mutationRate, int runNumber,
-                               bool isSmallScale) {
+                               int maxGenerations, double mutationRate, int runNumber, bool isSmallScale) {
     random_device rd;
     mt19937 rng(rd() + runNumber * 12345);
     
@@ -989,7 +988,7 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize,
                             randEnc.break_bit[j] = bitDist(rng);
                         }
                         
-                        PDPSolution msSol = runAssignmentLS(tabuResult, randEnc, data, 500);
+                        PDPSolution msSol = runAssignmentLS(tabuResult, randEnc, data, 50);
                         double msFit = msSol.totalCost + msSol.totalPenalty;
                         if (msFit < bestTabuFit - 0.01) {
                             bestTabuSol = msSol;
