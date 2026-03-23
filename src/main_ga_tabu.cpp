@@ -87,13 +87,15 @@ int main(int argc, char* argv[]) {
     cout << "  Depot: (" << data.coordinates[data.depotIndex].first 
          << ", " << data.coordinates[data.depotIndex].second << ")" << endl;
     
-    // Detect scale
+    // Detect scale - adaptive parameters based on problem size
     const int TOTAL_NODES = data.numCustomers + 1;  // +1 for depot
-    bool isSmallScale = (TOTAL_NODES <= 15);
+    bool isSmallScale = (TOTAL_NODES <= 20);  // FIX: Should include up to 20 nodes (19 customers)
     if (isSmallScale) {
         populationSize = 40;
         maxGenerations = 30;
-        cout << "\n[SCALE DETECTION] Small scale mode (nodes <= 15)" << endl;
+        cout << "\n[SCALE DETECTION] Small scale mode (nodes <= 20, customers <= 19)" << endl;
+    } else {
+        cout << "\n[SCALE DETECTION] Large scale mode (nodes > 20)" << endl;
     }
     
     // Run GA + Tabu

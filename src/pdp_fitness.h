@@ -73,7 +73,7 @@ PDPSolution runAssignmentLS(
 inline PDPSolution assignmentLSPostProcess(const std::vector<int>& seq, const PDPData& data) {
     PDPSolution sol = decodeAndEvaluate(seq, data);
     AssignmentEncoding enc = initFromSolution(seq, sol, data);
-    PDPSolution ls_sol = runAssignmentLS(seq, enc, data, 2000);
+    PDPSolution ls_sol = runAssignmentLS(seq, enc, data, 200);
     double ls_cost = ls_sol.totalCost + ls_sol.totalPenalty * 1000.0;
     double cur_cost = sol.totalCost + sol.totalPenalty * 1000.0;
     return (ls_cost < cur_cost - 0.01) ? ls_sol : sol;
