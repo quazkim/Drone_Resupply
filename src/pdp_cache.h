@@ -28,7 +28,9 @@ struct SequenceHash {
      * @param v Hash value to combine
      */
     static void hash_combine(size_t& seed, size_t v) {
-        const size_t magic = 0x9e3779b9UL;  // Golden ratio constant
+        // 64-bit-friendly hash_combine (boost-inspired).
+        // On 64-bit platforms this reduces collision vs 32-bit constant.
+        const size_t magic = 0x9e3779b97f4a7c15ULL;
         seed ^= v + magic + (seed << 6) + (seed >> 2);
     }
 
@@ -49,6 +51,29 @@ struct SequenceHash {
     }
 };
 
+// Hash for Chromosome: combines sequence + all assignment vectors.
+struct ChromosomeHash {
+    size_t operator()(const Chromosome& c) const {
+        // Mix element-wise to reduce the chance that different vectors produce same
+        // aggregate hashes. Also inject separators between vectors.
+        size_t seed = 0;
+        hash<int> hasher;
+        auto mixVec = [&](const vector<int>& v, int sep) {
+            SequenceHash::hash_combine(seed, hasher((int)v.size()));
+            SequenceHash::hash_combine(seed, hasher(sep));
+            for (int x : v) {
+                SequenceHash::hash_combine(seed, hasher(x));
+            }
+        };
+
+        mixVec(c.sequence, -7);
+        mixVec(c.truck_assign, -11);
+        mixVec(c.drone_assign, -13);
+        mixVec(c.break_bit, -17);
+        return seed;
+    }
+};
+
 /**
  * @brief Solution cache manager with automatic memory management.
  * 
@@ -65,7 +90,7 @@ struct SequenceHash {
 class SolutionCache {
 private:
     /// Cache storage: sequence -> solution
-    unordered_map<vector<int>, PDPSolution, SequenceHash> cache;
+    unordered_map<Chromosome, PDPSolution, ChromosomeHash> cache;
     
     /// Maximum cache size before automatic clearing
     static constexpr size_t MAX_CACHE_SIZE = 150000;
@@ -86,8 +111,15 @@ public:
      * @param seq Customer sequence
      * @return true if sequence is cached
      */
+    bool contains(const Chromosome& chromo) const {
+        return cache.find(chromo) != cache.end();
+    }
+
+    // Backward-compatible overload: cache by sequence only (empty assignments).
     bool contains(const vector<int>& seq) const {
-        return cache.find(seq) != cache.end();
+        Chromosome c;
+        c.sequence = seq;
+        return contains(c);
     }
 
     /**
@@ -96,13 +128,20 @@ public:
      * @param seq Customer sequence
      * @return Copy of the cached PDPSolution
      */
-    PDPSolution get(const vector<int>& seq) const {
-        auto it = cache.find(seq);
+    PDPSolution get(const Chromosome& chromo) const {
+        auto it = cache.find(chromo);
         if (it != cache.end()) {
             return it->second;
         }
         // Should not reach here if contains() was checked
         return PDPSolution();
+    }
+
+    // Backward-compatible overload: cache by sequence only (empty assignments).
+    PDPSolution get(const vector<int>& seq) const {
+        Chromosome c;
+        c.sequence = seq;
+        return get(c);
     }
 
     /**
@@ -111,14 +150,21 @@ public:
      * @param seq Customer sequence (key)
      * @param solution Complete PDPSolution (value)
      */
-    void put(const vector<int>& seq, const PDPSolution& solution) {
-        cache[seq] = solution;
+    void put(const Chromosome& chromo, const PDPSolution& solution) {
+        cache[chromo] = solution;
         
         // Check memory management: if cache exceeds limit, clear all
         if (cache.size() >= MAX_CACHE_SIZE) {
             cache.clear();
             clears++;
         }
+    }
+
+    // Backward-compatible overload: cache by sequence only (empty assignments).
+    void put(const vector<int>& seq, const PDPSolution& solution) {
+        Chromosome c;
+        c.sequence = seq;
+        put(c, solution);
     }
 
     /**

@@ -21,7 +21,7 @@ public:
     TabuSearchPDP(const PDPData& data, int maxIterations, SolutionCache& cache);
     
     // Main tabu search
-    std::vector<int> run(const std::vector<int>& initialSeq);
+    Chromosome run(const Chromosome& initial);
     
 private:
     const PDPData& data;
@@ -40,42 +40,42 @@ private:
     void updateWeights(int segmentLength);
     
     // Move generation functions (6 types)
-    bool findBestSwapMove(const std::vector<int>& currentSeq, double currentCost, 
-                         double bestCost, int iter, TabuMove& bestMove, 
-                         std::vector<int>& bestCandidate, double& bestDelta);
-    
-    bool findBestInsertMove(const std::vector<int>& currentSeq, double currentCost,
-                           double bestCost, int iter, TabuMove& bestMove,
-                           std::vector<int>& bestCandidate, double& bestDelta);
-    
-    bool findBest2OptMove(const std::vector<int>& currentSeq, double currentCost,
+    bool findBestSwapMove(const Chromosome& current, double currentCost,
                          double bestCost, int iter, TabuMove& bestMove,
-                         std::vector<int>& bestCandidate, double& bestDelta);
+                         Chromosome& bestCandidate, double& bestDelta);
     
-    bool findBest2OptStarMove(const std::vector<int>& currentSeq, double currentCost,
+    bool findBestInsertMove(const Chromosome& current, double currentCost,
+                           double bestCost, int iter, TabuMove& bestMove,
+                           Chromosome& bestCandidate, double& bestDelta);
+    
+    bool findBest2OptMove(const Chromosome& current, double currentCost,
+                         double bestCost, int iter, TabuMove& bestMove,
+                         Chromosome& bestCandidate, double& bestDelta);
+    
+    bool findBest2OptStarMove(const Chromosome& current, double currentCost,
                              double bestCost, int iter, TabuMove& bestMove,
-                             std::vector<int>& bestCandidate, double& bestDelta);
+                             Chromosome& bestCandidate, double& bestDelta);
     
-    bool findBestOrOptMove(const std::vector<int>& currentSeq, double currentCost,
+    bool findBestOrOptMove(const Chromosome& current, double currentCost,
                           double bestCost, int iter, TabuMove& bestMove,
-                          std::vector<int>& bestCandidate, double& bestDelta);
+                          Chromosome& bestCandidate, double& bestDelta);
     
-    bool findBestRelocatePairMove(const std::vector<int>& currentSeq, double currentCost,
+    bool findBestRelocatePairMove(const Chromosome& current, double currentCost,
                                  double bestCost, int iter, TabuMove& bestMove,
-                                 std::vector<int>& bestCandidate, double& bestDelta);
+                                 Chromosome& bestCandidate, double& bestDelta);
     
     // Tabu management
     void addTabu(const TabuMove& move, int currentIter);
     bool isTabu(const TabuMove& move, int currentIter) const;
     
     // Helper: apply move and get candidate
-    std::vector<int> applyMove(const std::vector<int>& seq, const TabuMove& move) const;
+    Chromosome applyMove(const Chromosome& chromo, const TabuMove& move) const;
 };
 
 // Simple interface function
-std::vector<int> tabuSearchPDP(const std::vector<int>& initialSeq,
-                               const PDPData& data,
-                               int maxIterations,
-                               SolutionCache& cache);
+Chromosome tabuSearchPDP(const Chromosome& initial,
+                         const PDPData& data,
+                         int maxIterations,
+                         SolutionCache& cache);
 
 #endif // PDP_TABU_H

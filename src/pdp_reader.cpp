@@ -8,13 +8,10 @@
 
 using namespace std;
 
-// === C├üC H├ÇM TIß╗åN ├ìCH KHOß║óNG C├üCH (Manhattan/Euclidean) ===
 double manhattanDistance(double x1, double y1, double x2, double y2) {
     return abs(x1 - x2) + abs(y1 - y2);
 }
-// euclideanDistance ─æ├ú ─æ╞░ß╗úc khai b├ío trong pdp_utils.h
 
-// X├óy dß╗▒ng Cß║ó HAI ma trß║¡n khoß║úng c├ích
 void buildAllDistanceMatrices(PDPData& data) {
     int n = data.numNodes;
     data.truckDistMatrix.assign(n, vector<double>(n, 0.0));
@@ -85,7 +82,6 @@ bool readPDPFile(const string& filename, PDPData& data) {
     }
     file.close();
     
-    // B╞»ß╗ÜC 1: X├üC ─Éß╗èNH V├Ç CH├êN DEPOT V├ÇO NODE 0 (0-BASED)
     pair<double, double> selectedDepot;
     if (data.depotMode == 1) {
         selectedDepot = data.depotBorder;

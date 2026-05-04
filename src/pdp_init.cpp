@@ -17,6 +17,147 @@
 
 using namespace std;
 
+static Chromosome makeChromosomeFromSequence(const vector<int>& seq, const PDPData& data, mt19937& gen) {
+    Chromosome c;
+    c.sequence = seq;
+    int n = (int)seq.size();
+    c.truck_assign.assign(n, 0);
+    c.drone_assign.assign(n, 0);
+    c.break_bit.assign(n, 1);
+
+    if (n == 0) return c;
+
+    // Contiguous left-to-right block assignment to trucks.
+    // truck_id = floor(i * T / n) keeps locality and guarantees 0..T-1.
+    for (int i = 0; i < n; ++i) {
+        int t = (int)((1LL * i * data.numTrucks) / max(1, n));
+        if (t < 0) t = 0;
+        if (t >= data.numTrucks) t = data.numTrucks - 1;
+        c.truck_assign[i] = t;
+    }
+
+    uniform_int_distribution<> droneDist(0, data.numDrones);
+    bernoulli_distribution breakStartDist(0.2);
+
+    for (int i = 0; i < n; ++i) {
+        int node = seq[i];
+        if (node >= 0 && node < data.numNodes && data.isCustomer(node) && data.nodeTypes[node] == "D" && data.readyTimes[node] > 0) {
+            c.drone_assign[i] = droneDist(gen); // 0..numDrones
+        } else {
+            c.drone_assign[i] = 0;
+        }
+
+        if (c.drone_assign[i] == 0) {
+            c.break_bit[i] = 1;
+        } else if (i == 0) {
+            c.break_bit[i] = 1;
+        } else if (c.drone_assign[i] != c.drone_assign[i - 1] || c.truck_assign[i] != c.truck_assign[i - 1]) {
+            c.break_bit[i] = 1;
+        } else {
+            c.break_bit[i] = breakStartDist(gen) ? 1 : 0;
+        }
+    }
+    return c;
+}
+
+// =========================================================
+// === HEURISTIC ENCODING BUILDER (NO PDPSolution, NO C_max) ===
+// =========================================================
+
+// Build a full chromosome from a given seq and truck_assign by constructing
+// drone_assign + break_bit using a lightweight consolidation heuristic.
+//
+// Core idea (greedy, contiguous):
+// - Scan seq left->right
+// - When encountering a D-customer (readyTime>0), start a drone trip at that index
+// - Try to consolidate with subsequent *consecutive* D-customers if:
+//     * same truck_assign
+//     * getDroneDistance <= 10.0
+//     * |readyTime diff| <= 30 minutes
+//     * group size <= data.getDroneCapacity()
+// - Assign a drone id round-robin from 1..data.numDrones for each new trip.
+// - Trip start has break_bit=1; followers in same trip have break_bit=0.
+// - For P/DL/non-drone D: drone_assign=0 and break_bit=1.
+Chromosome buildHeuristicChromosome(
+    const vector<int>& seq,
+    const vector<int>& truck_assign,
+    const PDPData& data
+) {
+    Chromosome c;
+    c.sequence = seq;
+    const int n = (int)seq.size();
+
+    c.truck_assign.resize(n, 0);
+    for (int i = 0; i < n; ++i) {
+        c.truck_assign[i] = (i < (int)truck_assign.size()) ? truck_assign[i] : 0;
+        if (c.truck_assign[i] < 0) c.truck_assign[i] = 0;
+        if (c.truck_assign[i] >= data.numTrucks) c.truck_assign[i] = max(0, data.numTrucks - 1);
+    }
+
+    c.drone_assign.assign(n, 0);
+    c.break_bit.assign(n, 1);
+    if (n == 0) return c;
+
+    if (data.numDrones <= 0) {
+        // No drones available: keep all drone_assign=0, break_bit=1
+        return c;
+    }
+
+    const int cap = max(1, data.getDroneCapacity());
+    int next_drone_id = 1; // 1..numDrones
+
+    auto isEligibleD = [&](int nodeId) -> bool {
+        if (nodeId < 0 || nodeId >= data.numNodes) return false;
+        if (!data.isCustomer(nodeId)) return false;
+        return (data.nodeTypes[nodeId] == "D" && data.readyTimes[nodeId] > 0);
+    };
+
+    for (int i = 0; i < n; ++i) {
+        const int node_i = seq[i];
+        if (!isEligibleD(node_i)) {
+            // P, DL, or non-eligible D: not assigned to drone
+            c.drone_assign[i] = 0;
+            c.break_bit[i] = 1;
+            continue;
+        }
+
+        const int drone_id = next_drone_id;
+        next_drone_id++;
+        if (next_drone_id > data.numDrones) next_drone_id = 1;
+
+        c.drone_assign[i] = drone_id;
+        c.break_bit[i] = 1;
+
+        const int truck_i = c.truck_assign[i];
+        const int ready_i = data.readyTimes[node_i];
+
+        int group_size = 1;
+        int j = i + 1;
+        while (j < n && group_size < cap) {
+            const int node_j = seq[j];
+            if (!isEligibleD(node_j)) break;
+            if (c.truck_assign[j] != truck_i) break;
+
+            const int ready_j = data.readyTimes[node_j];
+            if (abs(ready_j - ready_i) > 30) break;
+
+            const double dist = getDroneDistance(data, node_i, node_j);
+            if (dist > 10.0) break;
+
+            // Consolidate j into i's trip
+            c.drone_assign[j] = drone_id;
+            c.break_bit[j] = 0;
+            group_size++;
+            j++;
+        }
+
+        // Skip the consolidated block
+        i = j - 1;
+    }
+
+    return c;
+}
+
 // ============ UTILITY FUNCTIONS (Nội bộ file này) ============
 
 // Hàm tiện ích chung cho truck (Manhattan)
@@ -26,7 +167,6 @@ double getTruckDistance(const PDPData& data, int nodeA_id, int nodeB_id) {
     return data.truckDistMatrix[nodeA_id][nodeB_id];
 }
 
-// Hàm tiện ích chung cho drone (Euclidean)
 double getDroneDistance(const PDPData& data, int nodeA_id, int nodeB_id) {
     if (nodeA_id < 0 || nodeA_id >= data.numNodes || nodeB_id < 0 || nodeB_id >= data.numNodes) 
         return numeric_limits<double>::infinity();
@@ -399,4 +539,18 @@ vector<vector<int>> initStructuredPopulationPDP(int populationSize, const PDPDat
     population.insert(population.end(), nnPop.begin(), nnPop.end());
     cout << "Generated " << population.size() << " PDP individuals (sequence only, no separators)" << endl;
     return population;
+}
+
+vector<Chromosome> initStructuredPopulationChromosome(int populationSize, const PDPData& data, int runNumber) {
+    random_device rd;
+    unsigned int seed = rd() + runNumber * 54321;
+    mt19937 gen(seed);
+
+    vector<vector<int>> seqs = initStructuredPopulationPDP(populationSize, data, runNumber);
+    vector<Chromosome> pop;
+    pop.reserve(seqs.size());
+    for (const auto& s : seqs) {
+        pop.push_back(makeChromosomeFromSequence(s, data, gen));
+    }
+    return pop;
 }

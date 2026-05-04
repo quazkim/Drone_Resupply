@@ -1,0 +1,202 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+\title{Thiết kế lại mã hóa hai cấp cho GA + Tabu\\
+(Truck Separators + Drone Assignment/Boundary)}
+\author{Drone\_Resupply Project}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Mục tiêu}
+Tài liệu này đặc tả phương án mã hóa mới cho pipeline GA + Tabu.
+Mục tiêu là chuyển từ chromosome chỉ gồm sequence sang biểu diễn hai cấp sao cho:
+\begin{itemize}[leftmargin=1.2cm]
+    \item tách khách hàng theo truck một cách tường minh ở cấp trên,
+    \item điều khiển phục vụ bằng drone và biên chuyến (multi-trip) tường minh ở cấp dưới,
+    \item tương thích với kiểm tra khả thi (capacity, endurance, time window) ở decoder.
+\end{itemize}
+
+\section{Mã hóa cuối cùng}
+\subsection{Cấp trên: \texttt{sequence\_with\_truck\_sep}}
+Chromosome cấp trên là một vector duy nhất gồm:
+\begin{itemize}[leftmargin=1.2cm]
+    \item ID khách hàng: $1..N$
+    \item ID separator truck: $N+1..N+K-1$ (đúng $K-1$ separator)
+\end{itemize}
+
+Ý nghĩa:
+\begin{itemize}[leftmargin=1.2cm]
+    \item thứ tự khách = thứ tự phục vụ,
+    \item separator chia khách thành các segment truck.
+\end{itemize}
+
+Ví dụ ($N=8, K=3$):
+\[
+\text{Upper}=[3,7,1,9,8,2,10,6,5,4]
+\]
+với separator là $9,10$.
+Giải mã segment truck:
+\begin{itemize}[leftmargin=1.2cm]
+    \item Truck 0: $[3,7,1]$
+    \item Truck 1: $[8,2]$
+    \item Truck 2: $[6,5,4]$
+\end{itemize}
+
+\textbf{Quy tắc hợp lệ của upper}
+\begin{itemize}[leftmargin=1.2cm]
+    \item mỗi khách hàng xuất hiện đúng một lần,
+    \item mỗi separator truck xuất hiện đúng một lần,
+    \item không có ID thừa.
+\end{itemize}
+
+\subsection{Cấp dưới: \texttt{drone\_assign} + \texttt{boundary}}
+Hai vector cấp dưới được đánh chỉ số theo \textbf{vị trí khách hàng} sau khi bỏ separator khỏi upper.
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item \texttt{drone\_assign[i]}:
+    \begin{itemize}
+        \item $0$: khách $i$ do truck xử lý,
+        \item $1..D$: khách $i$ được gán cho drone $d$.
+    \end{itemize}
+    \item \texttt{boundary[i]}:
+    \begin{itemize}
+        \item $1$: khách $i$ là điểm bắt đầu một chuyến drone mới,
+        \item $0$: khách $i$ nối tiếp chuyến trước (cùng truck segment và cùng drone).
+    \end{itemize}
+\end{itemize}
+
+\textbf{Quy tắc hợp lệ của lower}
+\begin{itemize}[leftmargin=1.2cm]
+    \item nếu \texttt{drone\_assign[i]}$=0$ thì ép \texttt{boundary[i]}$=0$,
+    \item nếu \texttt{boundary[i]}$=0$ thì phải có khách drone hợp lệ trước đó để nối,
+    \item không được nối chuyến qua separator truck,
+    \item nếu đổi drone ID thì \texttt{boundary} bắt buộc bằng 1.
+\end{itemize}
+
+\section{Vì sao mô hình này bao quát hơn trong thực tế}
+So với cách đặt separator drone ở upper, mô hình này ổn định hơn vì:
+\begin{itemize}[leftmargin=1.2cm]
+    \item phân tách truck được biểu diễn tường minh ở upper,
+    \item phục vụ bằng drone được biểu diễn tường minh ở lower,
+    \item nhiều chuyến của cùng một drone được biểu diễn bằng \texttt{boundary},
+    \item không cần ngữ nghĩa separator drone cố định hoặc không giới hạn.
+\end{itemize}
+
+Lưu ý: tính khả thi vẫn do decoder kiểm tra (capacity/endurance/time-window), không hard-code hết trong chromosome.
+
+\section{Chiến lược khởi tạo}
+\subsection{Bước 1: Giữ nguyên bộ sinh upper hiện có}
+Giữ nguyên 4 nhóm khởi tạo upper:
+\begin{itemize}[leftmargin=1.2cm]
+    \item 10\% Random
+    \item 30\% Greedy-Time
+    \item 30\% Sweep-Angle
+    \item 30\% Nearest-Neighbor
+\end{itemize}
+
+\subsection{Bước 2: Chèn separator truck bằng chia đều}
+Với sequence khách độ dài $N$ và $K$ truck:
+\[
+\text{base}=\left\lfloor\frac{N}{K}\right\rfloor,\quad
+\text{rem}=N\bmod K
+\]
+Kích thước từng segment:
+\[
+\text{seg\_len}[i]=
+\begin{cases}
+\text{base}+1 & i<\text{rem}\\
+\text{base} & \text{ngược lại}
+\end{cases}
+\]
+Chèn separator sau mỗi segment, trừ segment cuối.
+
+Cải tiến tùy chọn: cho separator trượt trong cửa sổ $\pm 2$ để chọn điểm cắt có chi phí cạnh cục bộ nhỏ hơn.
+
+\subsection{Bước 3: Sinh lower bằng greedy decode nhẹ}
+Chạy hàm nhẹ \texttt{greedyDecodeForInit(upperWithSep, data)} để tạo:
+\begin{itemize}[leftmargin=1.2cm]
+    \item \texttt{drone\_assign} trong miền $[0..D]$,
+    \item \texttt{boundary} trong miền $\{0,1\}$.
+\end{itemize}
+
+Hàm init-light này nên:
+\begin{itemize}[leftmargin=1.2cm]
+    \item tách segment truck từ upper,
+    \item gán truck vs drone theo rule greedy hiện có,
+    \item tạo trip boundary,
+    \item bỏ qua phần mô phỏng timeline nặng.
+\end{itemize}
+
+Chuẩn hóa sau cùng:
+\begin{itemize}[leftmargin=1.2cm]
+    \item nếu \texttt{drone\_assign[i]}$=0$ thì \texttt{boundary[i]}$\leftarrow 0$,
+    \item boundary không được nối qua separator truck,
+    \item khách không đủ điều kiện drone bị ép \texttt{drone\_assign=0}.
+\end{itemize}
+
+\section{Contract decoder (cho đánh giá GA/Tabu)}
+Đầu vào decoder: $(\texttt{upper},\texttt{drone\_assign},\texttt{boundary})$.
+
+Quy trình:
+\begin{enumerate}[leftmargin=1.2cm]
+    \item tách upper thành các segment truck,
+    \item bỏ separator và dựng map vị trí khách,
+    \item dựng các chuyến drone từ \texttt{drone\_assign}+\texttt{boundary} trong từng segment,
+    \item mô phỏng hoạt động truck/drone và tính objective,
+    \item áp kiểm tra khả thi và penalty.
+\end{enumerate}
+
+\section{Ghi chú triển khai cho GA + Tabu}
+\subsection{Toán tử GA}
+\begin{itemize}[leftmargin=1.2cm]
+    \item Crossover upper: OX/PMX/CX trên upper đầy đủ + repair separator.
+    \item Crossover lower: one-point hoặc uniform cho \texttt{drone\_assign}/\texttt{boundary}.
+    \item Mutation upper: swap/inversion/displacement có repair nhận biết separator.
+    \item Mutation lower: flip drone value, flip boundary, split/merge boundary block.
+\end{itemize}
+
+\subsection{Bộ nhớ Tabu và neighborhood}
+\begin{itemize}[leftmargin=1.2cm]
+    \item Tabu key phải hash cả 3 vector.
+    \item Neighborhood nên chứa cả move upper và move lower.
+    \item Cách thực dụng: xen kẽ vòng upper-step và lower-step.
+\end{itemize}
+
+\section{Ví dụ kiểm tra nhanh}
+Giả sử upper sau khi bỏ separator có thứ tự khách:
+\[
+[3,7,1,8,2,6,5,4]
+\]
+Lower vectors:
+\[
+\texttt{drone\_assign}=[1,1,0,2,2,0,1,1]
+\]
+\[
+\texttt{boundary}=[1,0,0,1,0,0,1,0]
+\]
+Diễn giải:
+\begin{itemize}[leftmargin=1.2cm]
+    \item Chuyến A (drone 1): khách 3,7
+    \item khách 1 do truck phục vụ
+    \item Chuyến B (drone 2): khách 8,2
+    \item khách 6 do truck phục vụ
+    \item Chuyến C (drone 1): khách 5,4
+\end{itemize}
+
+\section{Kết luận}
+Phương án chốt:
+\begin{itemize}[leftmargin=1.2cm]
+    \item Upper: thứ tự khách + separator truck,
+    \item Lower: drone assignment + trip boundary,
+    \item Init: giữ 10/30/30/30 cho upper rồi chèn separator theo chia đều,
+    \item Lower init: suy ra từ greedy decode nhẹ cho giai đoạn khởi tạo.
+\end{itemize}
+Thiết kế này giữ được phong cách code hiện tại và cho phép tối ưu đầy đủ theo 3 vector trong GA + Tabu.
+
+\end{document}

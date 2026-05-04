@@ -58,6 +58,17 @@ void quickRepairPDP(vector<int>& seq, const PDPData& data, mt19937& gen);
  */
 vector<vector<int>> initStructuredPopulationPDP(int populationSize, const PDPData& data, int runNumber = 1);
 
+// New API: initialize full chromosome encoding (sequence + truck/drone/break arrays).
+vector<Chromosome> initStructuredPopulationChromosome(int populationSize, const PDPData& data, int runNumber = 1);
+
+// Build heuristic encoding (drone_assign + break_bit) given seq + truck_assign.
+// This function does NOT decode or simulate time; it only constructs a full Chromosome.
+Chromosome buildHeuristicChromosome(
+	const std::vector<int>& seq,
+	const std::vector<int>& truck_assign,
+	const PDPData& data
+);
+
 /**
  * @brief Generate population with completely random sequences.
  * @param populationSize Number of individuals

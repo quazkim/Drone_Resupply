@@ -63,8 +63,21 @@ int main(int argc, char* argv[]) {
         double sumCost = 0;
 
         for (size_t i = 0; i < population.size(); ++i) {
-            // Gọi hàm đánh giá (Decoder Giai đoạn 1: 100% Resupply)
-            PDPSolution sol = decodeAndEvaluate(population[i], data);
+            // Evaluate via decodeFromEncoding (new simulation engine).
+            Chromosome chromo;
+            chromo.sequence = population[i];
+            int n = (int)chromo.sequence.size();
+            chromo.truck_assign.assign(n, 0);
+            chromo.drone_assign.assign(n, 0);
+            chromo.break_bit.assign(n, 1);
+            for (int j = 0; j < n; ++j) {
+                int t = (int)((1LL * j * data.numTrucks) / max(1, n));
+                if (t < 0) t = 0;
+                if (t >= data.numTrucks) t = max(0, data.numTrucks - 1);
+                chromo.truck_assign[j] = t;
+            }
+
+            PDPSolution sol = decodeFromEncoding(chromo, data);
             
             double fitness = sol.totalCost + sol.totalPenalty;
             sumCost += sol.totalCost; // Chỉ tính C_max cho thống kê

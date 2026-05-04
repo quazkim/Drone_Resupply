@@ -7,6 +7,25 @@
 
 using namespace std;
 
+// Chromosome encoding used by GA/Tabu.
+// sequence: permutation of customer nodes
+// truck_assign: per-position truck assignment (0..numTrucks-1)
+// drone_assign: per-position drone assignment (0=truck only, 1..numDrones)
+// break_bit: per-position break indicator for grouping consecutive drone customers (0/1)
+struct Chromosome {
+    vector<int> sequence;
+    vector<int> truck_assign;
+    vector<int> drone_assign;
+    vector<int> break_bit;
+
+    bool operator==(const Chromosome& other) const {
+        return sequence == other.sequence &&
+               truck_assign == other.truck_assign &&
+               drone_assign == other.drone_assign &&
+               break_bit == other.break_bit;
+    }
+};
+
 /**
  * @brief Core data structure encapsulating the Pickup-Delivery Problem (PDP) instance.
  * 
@@ -135,7 +154,8 @@ struct TruckRouteInfo {
 };
 
 // Structure representing a complete PDP solution
-struct PDPSolution {
+struct PDPSolution : public Chromosome {
+
     vector<vector<int>> routes; // Vehicle routes (general principle for consistency)
     double totalCost = 0.0;     // Total cost (C_max)
     double totalPenalty = 0.0;  // Penalty for constraint violations
@@ -146,7 +166,8 @@ struct PDPSolution {
     vector<ResupplyEvent> resupply_events;
     vector<double> drone_completion_times; // Completion time for each drone
     
-    // Original sequence (for local search to re-decode)
+    // Backward-compatible alias (older code uses original_sequence).
+    // Prefer using `sequence` going forward.
     vector<int> original_sequence;
 };
 

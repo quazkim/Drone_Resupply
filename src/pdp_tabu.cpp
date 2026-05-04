@@ -70,72 +70,93 @@ bool TabuSearchPDP::isTabu(const TabuMove& move, int currentIter) const {
     return false;
 }
 
-vector<int> TabuSearchPDP::applyMove(const vector<int>& seq, const TabuMove& move) const {
-    vector<int> result = seq;
+Chromosome TabuSearchPDP::applyMove(const Chromosome& chromo, const TabuMove& move) const {
+    Chromosome result = chromo;
+    int n = (int)result.sequence.size();
+    if ((int)result.truck_assign.size() != n) result.truck_assign.assign(n, 0);
+    if ((int)result.drone_assign.size() != n) result.drone_assign.assign(n, 0);
+    if ((int)result.break_bit.size() != n) result.break_bit.assign(n, 1);
+
+    auto eraseInsert = [&](vector<int>& v, int from, int to) {
+        int temp = v[from];
+        v.erase(v.begin() + from);
+        v.insert(v.begin() + to, temp);
+    };
+
+    auto reverseSeg = [&](vector<int>& v, int i, int j) {
+        reverse(v.begin() + i, v.begin() + j + 1);
+    };
+
+    auto relocateBlock = [&](vector<int>& v, int start, int blockSize, int target) {
+        if (start + blockSize > (int)v.size()) return;
+        vector<int> block(v.begin() + start, v.begin() + start + blockSize);
+        v.erase(v.begin() + start, v.begin() + start + blockSize);
+        int insertPos = target;
+        if (target > start) insertPos -= blockSize;
+        insertPos = max(0, min(insertPos, (int)v.size()));
+        v.insert(v.begin() + insertPos, block.begin(), block.end());
+    };
+
+    auto relocatePair = [&](vector<int>& v, int start, int target) {
+        if (start + 1 >= (int)v.size()) return;
+        int a = v[start];
+        int b = v[start + 1];
+        v.erase(v.begin() + start, v.begin() + start + 2);
+        int insertPos = target;
+        if (target > start) insertPos -= 2;
+        insertPos = max(0, min(insertPos, (int)v.size()));
+        v.insert(v.begin() + insertPos, a);
+        v.insert(v.begin() + insertPos + 1, b);
+    };
     
     switch (move.type) {
         case 0: // Swap
-            swap(result[move.i], result[move.j]);
+            swap(result.sequence[move.i], result.sequence[move.j]);
+            swap(result.truck_assign[move.i], result.truck_assign[move.j]);
+            swap(result.drone_assign[move.i], result.drone_assign[move.j]);
+            swap(result.break_bit[move.i], result.break_bit[move.j]);
             break;
             
         case 1: { // Insert
-            int temp = result[move.i];
-            result.erase(result.begin() + move.i);
-            result.insert(result.begin() + move.j, temp);
+            eraseInsert(result.sequence, move.i, move.j);
+            eraseInsert(result.truck_assign, move.i, move.j);
+            eraseInsert(result.drone_assign, move.i, move.j);
+            eraseInsert(result.break_bit, move.i, move.j);
             break;
         }
         
         case 2: { // 2-opt (reverse segment)
-            reverse(result.begin() + move.i, result.begin() + move.j + 1);
+            reverseSeg(result.sequence, move.i, move.j);
+            reverseSeg(result.truck_assign, move.i, move.j);
+            reverseSeg(result.drone_assign, move.i, move.j);
+            reverseSeg(result.break_bit, move.i, move.j);
             break;
         }
         
         case 3: { // 2-opt* (reverse segment between i and j)
             if (move.i < move.j) {
-                reverse(result.begin() + move.i, result.begin() + move.j + 1);
+                reverseSeg(result.sequence, move.i, move.j);
+                reverseSeg(result.truck_assign, move.i, move.j);
+                reverseSeg(result.drone_assign, move.i, move.j);
+                reverseSeg(result.break_bit, move.i, move.j);
             }
             break;
         }
         
         case 4: { // Or-opt (relocate block)
             int blockSize = move.param;
-            if (move.i + blockSize <= (int)result.size()) {
-                vector<int> block(result.begin() + move.i, result.begin() + move.i + blockSize);
-                result.erase(result.begin() + move.i, result.begin() + move.i + blockSize);
-                
-                int insertPos = move.j;
-                if (move.j > move.i) insertPos -= blockSize;
-                
-                // Safety check: ensure insertPos is valid
-                insertPos = max(0, min(insertPos, (int)result.size()));
-                
-                result.insert(result.begin() + insertPos, block.begin(), block.end());
-            }
+            relocateBlock(result.sequence, move.i, blockSize, move.j);
+            relocateBlock(result.truck_assign, move.i, blockSize, move.j);
+            relocateBlock(result.drone_assign, move.i, blockSize, move.j);
+            relocateBlock(result.break_bit, move.i, blockSize, move.j);
             break;
         }
         
         case 5: { // Relocate pair
-            if (move.i + 1 < (int)result.size()) {
-                int cust1 = result[move.i];
-                int cust2 = result[move.i + 1];
-                result.erase(result.begin() + move.i, result.begin() + move.i + 2);
-                
-                int insertPos = move.j;
-                if (move.j > move.i) insertPos -= 2;
-                
-                // Safety check: ensure insertPos is valid
-                insertPos = max(0, min(insertPos, (int)result.size()));
-                
-                // Insert both elements safely
-                if (insertPos < (int)result.size()) {
-                    result.insert(result.begin() + insertPos, cust1);
-                    result.insert(result.begin() + insertPos + 1, cust2);
-                } else {
-                    // Insert at end
-                    result.push_back(cust1);
-                    result.push_back(cust2);
-                }
-            }
+            relocatePair(result.sequence, move.i, move.j);
+            relocatePair(result.truck_assign, move.i, move.j);
+            relocatePair(result.drone_assign, move.i, move.j);
+            relocatePair(result.break_bit, move.i, move.j);
             break;
         }
     }
@@ -145,18 +166,18 @@ vector<int> TabuSearchPDP::applyMove(const vector<int>& seq, const TabuMove& mov
 
 // ============ MOVE GENERATION FUNCTIONS ============
 
-bool TabuSearchPDP::findBestSwapMove(const vector<int>& currentSeq, double currentCost,
+bool TabuSearchPDP::findBestSwapMove(const Chromosome& current, double currentCost,
                                      double bestCost, int iter, TabuMove& bestMove,
-                                     vector<int>& bestCandidate, double& bestDelta) {
+                                     Chromosome& bestCandidate, double& bestDelta) {
     bool found = false;
     
-    for (int i = 0; i < (int)currentSeq.size(); ++i) {
-        for (int j = i + 1; j < (int)currentSeq.size(); ++j) {
+    for (int i = 0; i < (int)current.sequence.size(); ++i) {
+        for (int j = i + 1; j < (int)current.sequence.size(); ++j) {
             TabuMove move{0, i, j, 0};
             
             bool isTabuMove = isTabu(move, iter);
             
-            vector<int> candidate = applyMove(currentSeq, move);
+            Chromosome candidate = applyMove(current, move);
             PDPSolution candidateSol = evaluateWithCache(candidate, data, cache);
             double candidateCost = candidateSol.totalCost + candidateSol.totalPenalty;
             double delta = candidateCost - currentCost;
@@ -176,11 +197,11 @@ bool TabuSearchPDP::findBestSwapMove(const vector<int>& currentSeq, double curre
     return found;
 }
 
-bool TabuSearchPDP::findBestInsertMove(const vector<int>& currentSeq, double currentCost,
+bool TabuSearchPDP::findBestInsertMove(const Chromosome& current, double currentCost,
                                        double bestCost, int iter, TabuMove& bestMove,
-                                       vector<int>& bestCandidate, double& bestDelta) {
+                                       Chromosome& bestCandidate, double& bestDelta) {
     bool found = false;
-    int n = currentSeq.size();
+    int n = (int)current.sequence.size();
     
     // Limit search for large instances
     int maxTrials = min(50, n * n / 4);
@@ -197,7 +218,7 @@ bool TabuSearchPDP::findBestInsertMove(const vector<int>& currentSeq, double cur
         TabuMove move{1, i, j, 0};
         bool isTabuMove = isTabu(move, iter);
         
-        vector<int> candidate = applyMove(currentSeq, move);
+        Chromosome candidate = applyMove(current, move);
         PDPSolution candidateSol = evaluateWithCache(candidate, data, cache);
         double candidateCost = candidateSol.totalCost + candidateSol.totalPenalty;
         double delta = candidateCost - currentCost;
@@ -215,11 +236,11 @@ bool TabuSearchPDP::findBestInsertMove(const vector<int>& currentSeq, double cur
     return found;
 }
 
-bool TabuSearchPDP::findBest2OptMove(const vector<int>& currentSeq, double currentCost,
+bool TabuSearchPDP::findBest2OptMove(const Chromosome& current, double currentCost,
                                      double bestCost, int iter, TabuMove& bestMove,
-                                     vector<int>& bestCandidate, double& bestDelta) {
+                                     Chromosome& bestCandidate, double& bestDelta) {
     bool found = false;
-    int n = currentSeq.size();
+    int n = (int)current.sequence.size();
     
     // Try 2-opt on segments
     for (int i = 0; i < n - 1; ++i) {
@@ -227,7 +248,7 @@ bool TabuSearchPDP::findBest2OptMove(const vector<int>& currentSeq, double curre
             TabuMove move{2, i, j, 0};
             bool isTabuMove = isTabu(move, iter);
             
-            vector<int> candidate = applyMove(currentSeq, move);
+            Chromosome candidate = applyMove(current, move);
             PDPSolution candidateSol = evaluateWithCache(candidate, data, cache);
             double candidateCost = candidateSol.totalCost + candidateSol.totalPenalty;
             double delta = candidateCost - currentCost;
@@ -246,11 +267,11 @@ bool TabuSearchPDP::findBest2OptMove(const vector<int>& currentSeq, double curre
     return found;
 }
 
-bool TabuSearchPDP::findBest2OptStarMove(const vector<int>& currentSeq, double currentCost,
+bool TabuSearchPDP::findBest2OptStarMove(const Chromosome& current, double currentCost,
                                          double bestCost, int iter, TabuMove& bestMove,
-                                         vector<int>& bestCandidate, double& bestDelta) {
+                                         Chromosome& bestCandidate, double& bestDelta) {
     bool found = false;
-    int n = currentSeq.size();
+    int n = (int)current.sequence.size();
     
     // Similar to 2-opt but different reversal strategy
     for (int i = 0; i < n - 2; ++i) {
@@ -258,7 +279,7 @@ bool TabuSearchPDP::findBest2OptStarMove(const vector<int>& currentSeq, double c
             TabuMove move{3, i, j, 0};
             bool isTabuMove = isTabu(move, iter);
             
-            vector<int> candidate = applyMove(currentSeq, move);
+            Chromosome candidate = applyMove(current, move);
             PDPSolution candidateSol = evaluateWithCache(candidate, data, cache);
             double candidateCost = candidateSol.totalCost + candidateSol.totalPenalty;
             double delta = candidateCost - currentCost;
@@ -277,11 +298,11 @@ bool TabuSearchPDP::findBest2OptStarMove(const vector<int>& currentSeq, double c
     return found;
 }
 
-bool TabuSearchPDP::findBestOrOptMove(const vector<int>& currentSeq, double currentCost,
+bool TabuSearchPDP::findBestOrOptMove(const Chromosome& current, double currentCost,
                                       double bestCost, int iter, TabuMove& bestMove,
-                                      vector<int>& bestCandidate, double& bestDelta) {
+                                      Chromosome& bestCandidate, double& bestDelta) {
     bool found = false;
-    int n = currentSeq.size();
+    int n = (int)current.sequence.size();
     
     // Try block sizes 1, 2, 3
     for (int blockSize = 1; blockSize <= 3; ++blockSize) {
@@ -294,7 +315,7 @@ bool TabuSearchPDP::findBestOrOptMove(const vector<int>& currentSeq, double curr
                 TabuMove move{4, i, j, blockSize};
                 bool isTabuMove = isTabu(move, iter);
                 
-                vector<int> candidate = applyMove(currentSeq, move);
+                Chromosome candidate = applyMove(current, move);
                 PDPSolution candidateSol = evaluateWithCache(candidate, data, cache);
                 double candidateCost = candidateSol.totalCost + candidateSol.totalPenalty;
                 double delta = candidateCost - currentCost;
@@ -314,11 +335,11 @@ bool TabuSearchPDP::findBestOrOptMove(const vector<int>& currentSeq, double curr
     return found;
 }
 
-bool TabuSearchPDP::findBestRelocatePairMove(const vector<int>& currentSeq, double currentCost,
+bool TabuSearchPDP::findBestRelocatePairMove(const Chromosome& current, double currentCost,
                                              double bestCost, int iter, TabuMove& bestMove,
-                                             vector<int>& bestCandidate, double& bestDelta) {
+                                             Chromosome& bestCandidate, double& bestDelta) {
     bool found = false;
-    int n = currentSeq.size();
+    int n = (int)current.sequence.size();
     
     if (n < 3) return false;
     
@@ -329,7 +350,7 @@ bool TabuSearchPDP::findBestRelocatePairMove(const vector<int>& currentSeq, doub
             TabuMove move{5, i, j, 0};
             bool isTabuMove = isTabu(move, iter);
             
-            vector<int> candidate = applyMove(currentSeq, move);
+            Chromosome candidate = applyMove(current, move);
             PDPSolution candidateSol = evaluateWithCache(candidate, data, cache);
             double candidateCost = candidateSol.totalCost + candidateSol.totalPenalty;
             double delta = candidateCost - currentCost;
@@ -350,11 +371,19 @@ bool TabuSearchPDP::findBestRelocatePairMove(const vector<int>& currentSeq, doub
 
 // ============ MAIN TABU SEARCH ============
 
-vector<int> TabuSearchPDP::run(const vector<int>& initialSeq) {
-    vector<int> currentSeq = initialSeq;
-    vector<int> bestSeq = initialSeq;
-    
-    PDPSolution currentSol = evaluateWithCache(currentSeq, data, cache);
+Chromosome TabuSearchPDP::run(const Chromosome& initial) {
+    Chromosome current = initial;
+    Chromosome best = initial;
+
+    // Ensure encoding vectors exist (Tabu moves operate on aligned gene arrays).
+    int n = (int)current.sequence.size();
+    if ((int)current.truck_assign.size() != n) current.truck_assign.assign(n, 0);
+    if ((int)current.drone_assign.size() != n) current.drone_assign.assign(n, 0);
+    if ((int)current.break_bit.size() != n) current.break_bit.assign(n, 1);
+
+    best = current;
+
+    PDPSolution currentSol = evaluateWithCache(current, data, cache);
     PDPSolution bestSol = currentSol;
     double currentCost = currentSol.totalCost + currentSol.totalPenalty;
     double bestCost = currentCost;
@@ -369,34 +398,34 @@ vector<int> TabuSearchPDP::run(const vector<int>& initialSeq) {
         int moveIndex = selectMoveIndex();
         
         TabuMove bestMove{-1, -1, -1, 0};
-        vector<int> bestCandidate;
+        Chromosome bestCandidate;
         double bestDelta = numeric_limits<double>::infinity();
         bool moveFound = false;
         
         // Find best move of selected type
         switch (moveIndex) {
             case 0:
-                moveFound = findBestSwapMove(currentSeq, currentCost, bestCost, iter, 
+                moveFound = findBestSwapMove(current, currentCost, bestCost, iter,
                                             bestMove, bestCandidate, bestDelta);
                 break;
             case 1:
-                moveFound = findBestInsertMove(currentSeq, currentCost, bestCost, iter,
+                moveFound = findBestInsertMove(current, currentCost, bestCost, iter,
                                               bestMove, bestCandidate, bestDelta);
                 break;
             case 2:
-                moveFound = findBest2OptMove(currentSeq, currentCost, bestCost, iter,
+                moveFound = findBest2OptMove(current, currentCost, bestCost, iter,
                                             bestMove, bestCandidate, bestDelta);
                 break;
             case 3:
-                moveFound = findBest2OptStarMove(currentSeq, currentCost, bestCost, iter,
+                moveFound = findBest2OptStarMove(current, currentCost, bestCost, iter,
                                                 bestMove, bestCandidate, bestDelta);
                 break;
             case 4:
-                moveFound = findBestOrOptMove(currentSeq, currentCost, bestCost, iter,
+                moveFound = findBestOrOptMove(current, currentCost, bestCost, iter,
                                              bestMove, bestCandidate, bestDelta);
                 break;
             case 5:
-                moveFound = findBestRelocatePairMove(currentSeq, currentCost, bestCost, iter,
+                moveFound = findBestRelocatePairMove(current, currentCost, bestCost, iter,
                                                      bestMove, bestCandidate, bestDelta);
                 break;
         }
@@ -404,9 +433,9 @@ vector<int> TabuSearchPDP::run(const vector<int>& initialSeq) {
         // Apply best move if found
         if (moveFound && bestMove.type != -1) {
             double previousCost = currentCost;
-            currentSeq = bestCandidate;
+            current = bestCandidate;
             
-            PDPSolution newSol = evaluateWithCache(currentSeq, data, cache);
+            PDPSolution newSol = evaluateWithCache(current, data, cache);
             currentCost = newSol.totalCost + newSol.totalPenalty;
             currentSol = newSol;
             
@@ -414,7 +443,7 @@ vector<int> TabuSearchPDP::run(const vector<int>& initialSeq) {
             if (currentCost < bestCost) {
                 scores[moveIndex] += delta1; // Best solution found
                 bestCost = currentCost;
-                bestSeq = currentSeq;
+                best = current;
                 bestSol = newSol;
                 noImprovement = 0;
             } else if (currentCost < previousCost) {
@@ -448,13 +477,12 @@ vector<int> TabuSearchPDP::run(const vector<int>& initialSeq) {
         }
     }
     
-    return bestSeq;
+    return best;
 }
 
-// ============ SIMPLE INTERFACE ============
 
-vector<int> tabuSearchPDP(const vector<int>& initialSeq, const PDPData& data, 
-                          int maxIterations, SolutionCache& cache) {
+Chromosome tabuSearchPDP(const Chromosome& initial, const PDPData& data,
+                         int maxIterations, SolutionCache& cache) {
     TabuSearchPDP tabu(data, maxIterations, cache);
-    return tabu.run(initialSeq);
+    return tabu.run(initial);
 }

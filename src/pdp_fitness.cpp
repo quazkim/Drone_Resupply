@@ -12,12 +12,6 @@
 
 using namespace std;
 
-// ============ CONFIGURATION ============
-static const bool ENABLE_MERGE_STRATEGIES = true;   // Set to false to disable merge
-static const bool ENABLE_CONSOLIDATION = true;      // Allow multiple packages per trip
-static const bool ENABLE_ASSIGNMENT_LS = false;      // Disabled: first-improvement LS inside fitness
-static const int ASSIGNMENT_LS_MAX_ITER = 50;        // Max iterations for assignment LS
-
 // ============ FORWARD DECLARATIONS ============
 
 // Trang thai cua moi xe tai (dung chung cho nhieu functions)
@@ -58,60 +52,6 @@ static pair<double, bool> evaluateDroneTrip(
     const PDPData& data,
     const vector<double>& Drone_Available_Time
 );
-
-/**
- * @brief Tim cac customers type D co the consolidate trong 1 drone trip
- * @param seq Sequence cua customers
- * @param start_idx Index bat dau tim kiem
- * @param data Du lieu bai toan
- * @param truck_current_pos Vi tri hien tai cua truck
- * @param max_consolidate So luong toi da customers trong 1 trip
- * @return Vector cac customer IDs co the consolidate
- */
-static vector<int> findConsolidationCandidates(
-    const vector<int>& seq,
-    int start_idx,
-    const PDPData& data,
-    int truck_current_pos,
-    int max_consolidate
-) {
-    vector<int> candidates;
-    int current_customer = seq[start_idx];
-    
-    // Customer hien tai luon duoc them vao
-    if (data.nodeTypes[current_customer] == "D" && data.readyTimes[current_customer] > 0) {
-        candidates.push_back(current_customer);
-    } else {
-        return candidates; // Chi consolidate cho type D
-    }
-    
-    // Tim them cac customers type D tiep theo trong sequence
-    // Chi consolidate neu:
-    // 1. Cung type D
-    // 2. Ready time khong qua xa nhau (trong vong 30 phut)
-    // 3. Khoang cach dia ly gan nhau (< 10km tu current customer)
-    int current_ready = data.readyTimes[current_customer];
-    
-    for (int i = start_idx + 1; i < seq.size() && candidates.size() < max_consolidate; ++i) {
-        int next_customer = seq[i];
-        if (!data.isCustomer(next_customer)) continue;
-        
-        // Chß╗ë consolidate type D (C1 customers)
-        if (data.nodeTypes[next_customer] == "D" && data.readyTimes[next_customer] > 0) {
-            int next_ready = data.readyTimes[next_customer];
-            double distance = getDroneDistance(data, current_customer, next_customer);
-            
-            // Kiem tra dieu kien consolidation
-            // Ready time khong qua xa: trong vong 30 phut
-            // Khoang cach khong qua xa: < 10km
-            if (abs(next_ready - current_ready) <= 30 && distance <= 10.0) {
-                candidates.push_back(next_customer);
-            }
-        }
-    }
-    
-    return candidates;
-}
 
 /**
  * @brief Tinh toan chi phi va kiem tra feasibility cua drone trip
@@ -220,216 +160,6 @@ static pair<double, bool> evaluateDroneTrip(
     return {completion_time, feasible};
 }
 
-/**
- * @brief Merge 2 drone trips va kiem tra xem co tot hon khong
- * @return pair<merged_event, improvement> - improvement > 0 neu tot hon
- */
-static pair<ResupplyEvent, double> tryMergeTrips(
-    const ResupplyEvent& trip1,
-    const ResupplyEvent& trip2,
-    const PDPData& data,
-    const vector<TruckState>& trucks,
-    const vector<double>& Drone_Available_Time
-) {
-    ResupplyEvent merged;
-    merged.customer_ids = trip1.customer_ids;
-    merged.customer_ids.insert(merged.customer_ids.end(),
-                               trip2.customer_ids.begin(),
-                               trip2.customer_ids.end());
-    merged.drone_id = trip1.drone_id;
-    merged.truck_id = trip1.truck_id;
-    
-    // Sort by ready time
-    sort(merged.customer_ids.begin(), merged.customer_ids.end(),
-         [&data](int a, int b) { return data.readyTimes[a] < data.readyTimes[b]; });
-    
-    // Check capacity
-    if ((int)merged.customer_ids.size() > data.getDroneCapacity()) {
-        return {merged, -1e9}; // Not feasible
-    }
-    
-    // Check consolidation constraints
-    if (merged.customer_ids.size() > 1) {
-        int first_ready = data.readyTimes[merged.customer_ids[0]];
-        int max_ready = first_ready;
-        int min_ready = first_ready;
-        
-        for (size_t i = 1; i < merged.customer_ids.size(); ++i) {
-            int cust = merged.customer_ids[i];
-            int ready = data.readyTimes[cust];
-            
-            max_ready = max(max_ready, ready);
-            min_ready = min(min_ready, ready);
-            
-            // Ready time constraint (30 min - relaxed for feasibility)
-            if (abs(ready - first_ready) > 30) {
-                return {merged, -1e9};
-            }
-            
-            // Distance constraint (10km from first)
-            double dist = getDroneDistance(data, merged.customer_ids[0], cust);
-            if (dist > 10.0) {
-                return {merged, -1e9};
-            }
-        }
-        
-        // SMART CHECK: Nếu ready time chênh lệch > 15 phút
-        // → Merge có thể GÂY WAITING TIME cao
-        // Chỉ merge nếu có lợi ích rõ ràng về khoảng cách
-        int ready_gap = max_ready - min_ready;
-        if (ready_gap > 15) {
-            // Tính avg distance giữa customers
-            double total_dist = 0;
-            int pair_count = 0;
-            for (size_t i = 0; i < merged.customer_ids.size(); ++i) {
-                for (size_t j = i + 1; j < merged.customer_ids.size(); ++j) {
-                    total_dist += getDroneDistance(data, 
-                                                   merged.customer_ids[i], 
-                                                   merged.customer_ids[j]);
-                    pair_count++;
-                }
-            }
-            double avg_dist = total_dist / pair_count;
-            
-            // Nếu ready gap lớn VÀ customers xa nhau → KHÔNG merge
-            if (avg_dist > 3.0) {  // 3km threshold
-                return {merged, -1e9};
-            }
-        }
-    }
-    
-    // Evaluate merged trip
-    auto result = evaluateDroneTrip(
-        merged.customer_ids,
-        merged.drone_id,
-        trucks[merged.truck_id],
-        data,
-        Drone_Available_Time
-    );
-    
-    if (!result.second) { // Not feasible
-        return {merged, -1e9};
-    }
-    
-    double merged_completion = result.first;
-    
-    // Calculate improvement: compare with doing 2 separate trips
-    // CRITICAL: Phải xét xem 2 trips có cùng drone hay không
-    
-    double trip1_completion = evaluateDroneTrip(
-        trip1.customer_ids, trip1.drone_id, 
-        trucks[trip1.truck_id], data, Drone_Available_Time).first;
-    double trip2_completion = evaluateDroneTrip(
-        trip2.customer_ids, trip2.drone_id,
-        trucks[trip2.truck_id], data, Drone_Available_Time).first;
-    
-    double original_completion;
-    
-    if (trip1.drone_id == trip2.drone_id) {
-        // CÙNG DRONE: Phải chạy tuần tự (sequential)
-        // Trip 2 chỉ bắt đầu sau khi trip 1 hoàn thành
-        
-        // Giả sử trip1 chạy trước (có ready time sớm hơn)
-        int trip1_max_ready = 0;
-        for (int c : trip1.customer_ids) 
-            trip1_max_ready = max(trip1_max_ready, data.readyTimes[c]);
-        
-        int trip2_max_ready = 0;
-        for (int c : trip2.customer_ids)
-            trip2_max_ready = max(trip2_max_ready, data.readyTimes[c]);
-        
-        if (trip1_max_ready <= trip2_max_ready) {
-            // Trip 1 trước, Trip 2 sau
-            // Trip 2 phải đợi trip 1 về depot + ready time của trip 2
-            double trip2_start = max(trip1_completion, (double)trip2_max_ready);
-            double trip2_adjusted = trip2_start - trip2_max_ready + trip2_completion;
-            original_completion = trip2_adjusted;
-        } else {
-            // Trip 2 trước, Trip 1 sau
-            double trip1_start = max(trip2_completion, (double)trip1_max_ready);
-            double trip1_adjusted = trip1_start - trip1_max_ready + trip1_completion;
-            original_completion = trip1_adjusted;
-        }
-    } else {
-        // KHÁC DRONE: Chạy song song (parallel)
-        original_completion = max(trip1_completion, trip2_completion);
-    }
-    
-    // Calculate waiting time penalty for merged trip
-    double merged_waiting_penalty = 0;
-    if (merged.customer_ids.size() > 1) {
-        int max_ready = 0;
-        for (int cust : merged.customer_ids) {
-            max_ready = max(max_ready, data.readyTimes[cust]);
-        }
-        
-        // Các customers có ready time sớm hơn phải đợi
-        for (int cust : merged.customer_ids) {
-            int wait_time = max_ready - data.readyTimes[cust];
-            merged_waiting_penalty += wait_time * 0.5; // 0.5 weight cho waiting
-        }
-    }
-    
-    // Adjusted improvement (trừ đi waiting penalty)
-    double improvement = original_completion - merged_completion - merged_waiting_penalty;
-    
-    // CHỈ merge nếu improvement > threshold (ít nhất 1 phút)
-    if (improvement < 1.0) {
-        return {merged, -1.0}; // Not worth merging
-    }
-    
-    // Update merged event with full details
-    double max_ready = 0.0;
-    for (int cust : merged.customer_ids) {
-        max_ready = max(max_ready, (double)data.readyTimes[cust]);
-    }
-    
-    double T_Drone_Ready = max(Drone_Available_Time[merged.drone_id], max_ready);
-    merged.drone_depart_time = T_Drone_Ready + data.depotDroneLoadTime;
-    
-    const auto& truck = trucks[merged.truck_id];
-    
-    // LOGIC DUNG: Chi co 1 resupply point (customer dau tien)
-    int resupply_point = merged.customer_ids[0];
-    
-    // Drone bay tu depot -> resupply point
-    double t_fly_to_resupply = getDroneDistance(data, data.depotIndex, resupply_point) / data.droneSpeed * 60.0;
-    double drone_arrive = merged.drone_depart_time + t_fly_to_resupply;
-    
-    // Truck den resupply point
-    double truck_travel = getTruckDistance(data, truck.current_position, resupply_point) / data.truckSpeed * 60.0;
-    double truck_arrive = truck.available_time + truck_travel;
-    
-    // Resupply
-    double resupply_start = max(drone_arrive, truck_arrive);
-    double wait = resupply_start - drone_arrive;
-    double resupply_end = resupply_start + data.resupplyTime;
-    
-    // Drone ve depot
-    double t_return = getDroneDistance(data, resupply_point, data.depotIndex) / data.droneSpeed * 60.0;
-    merged.drone_return_time = resupply_end + t_return;
-    merged.total_flight_time = t_fly_to_resupply + wait + t_return;
-    
-    // ONE RENDEZVOUS: Chi luu 1 resupply point
-    merged.resupply_point = resupply_point;
-    merged.drone_arrive_time = drone_arrive;
-    merged.truck_arrive_time = truck_arrive;
-    merged.resupply_start_time = resupply_start;
-    merged.resupply_end_time = resupply_end;
-    
-    // Truck tu di giao hang cho cac customers
-    double truck_delivery_time = resupply_end;
-    int current_pos = resupply_point;
-    for (int cust : merged.customer_ids) {
-        double travel = getTruckDistance(data, current_pos, cust) / data.truckSpeed * 60.0;
-        truck_delivery_time += travel + data.truckServiceTime;
-        current_pos = cust;
-    }
-    merged.truck_delivery_end = truck_delivery_time;
-    
-    return {merged, improvement};
-}
-
 // =========================================================
 // === ASSIGNMENT ENCODING + LOCAL SEARCH ===
 // =========================================================
@@ -494,7 +224,11 @@ static PDPSolution decodeFromEncoding(
     sol.totalCost = 0.0;
     sol.totalPenalty = 0.0;
     sol.isFeasible = true;
+    sol.sequence = seq;
     sol.original_sequence = seq;
+    sol.truck_assign = enc.truck_assign;
+    sol.drone_assign = enc.drone_assign;
+    sol.break_bit = enc.break_bit;
 
     if (seq.empty()) {
         sol.totalPenalty = 1e9;
@@ -822,6 +556,14 @@ static PDPSolution decodeFromEncoding(
     return sol;
 }
 
+PDPSolution decodeFromEncoding(const Chromosome& chromo, const PDPData& data) {
+    AssignmentEncoding enc;
+    enc.truck_assign = chromo.truck_assign;
+    enc.drone_assign = chromo.drone_assign;
+    enc.break_bit = chromo.break_bit;
+    return decodeFromEncoding(chromo.sequence, enc, data);
+}
+
 // Extract encoding from a greedy-decoded solution
 AssignmentEncoding initFromSolution(
     const vector<int>& seq,
@@ -1089,13 +831,13 @@ PDPSolution runAssignmentLS(
 // =========================================================
 
 /**
- * @brief Wrapper for decodeAndEvaluate with solution caching.
+ * @brief Wrapper for decodeFromEncoding with solution caching.
  * 
  * Implements O(1) cache lookup using SequenceHash on vector<int>.
  * Automatically clears cache when memory limit is exceeded.
  * 
  * Cache hit: Returns cached solution copy (O(1) + copy time)
- * Cache miss: Calls decodeAndEvaluate, stores in cache (O(decode) + hash ops)
+ * Cache miss: Calls decodeFromEncoding, stores in cache (O(decode) + hash ops)
  * 
  * @param seq Customer sequence
  * @param data PDP instance
@@ -1107,20 +849,38 @@ PDPSolution evaluateWithCache(
     const PDPData& data,
     SolutionCache& cache
 ) {
-    // Check if solution is already in cache
-    if (cache.contains(seq)) {
-        cache.recordHit();
-        return cache.get(seq);  // Returns a copy (O(1) lookup + copy)
+    // Compatibility overload: build a deterministic baseline encoding from seq
+    // and evaluate via decodeFromEncoding (the only supported simulation engine).
+    Chromosome chromo;
+    chromo.sequence = seq;
+    int n = (int)seq.size();
+    chromo.truck_assign.assign(n, 0);
+    chromo.drone_assign.assign(n, 0);
+    chromo.break_bit.assign(n, 1);
+    for (int i = 0; i < n; ++i) {
+        int t = (int)((1LL * i * data.numTrucks) / max(1, n));
+        if (t < 0) t = 0;
+        if (t >= data.numTrucks) t = max(0, data.numTrucks - 1);
+        chromo.truck_assign[i] = t;
     }
-    
-    // Cache miss: decode and evaluate solution
+
+    return evaluateWithCache(chromo, data, cache);
+}
+
+PDPSolution evaluateWithCache(
+    const Chromosome& chromo,
+    const PDPData& data,
+    SolutionCache& cache
+) {
+    if (cache.contains(chromo)) {
+        cache.recordHit();
+        return cache.get(chromo);
+    }
+
     cache.recordMiss();
-    PDPSolution solution = decodeAndEvaluate(seq, data);
-    
-    // Store in cache for future use
-    cache.put(seq, solution);
-    
-    return solution;  // Return the freshly computed solution
+    PDPSolution solution = decodeFromEncoding(chromo, data);
+    cache.put(chromo, solution);
+    return solution;
 }
 
 // =========================================================
@@ -1133,12 +893,14 @@ PDPSolution evaluateWithCache(
  * @param data Du lieu bai toan
  * @return PDPSolution chua C_max (totalCost) va totalPenalty
  */
+#if 0
 PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
     PDPSolution sol;
     sol.totalCost = 0.0;     
     sol.totalPenalty = 0.0;
     sol.isFeasible = true;
-    sol.original_sequence = seq;  // Luu sequence goc
+    sol.sequence = seq;
+    sol.original_sequence = seq;  // backward compat
 
     if (seq.empty()) {
         sol.totalPenalty = 1e9;
@@ -1159,6 +921,24 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
         trucks[i].arrival_times.push_back(0.0);
         trucks[i].departure_times.push_back(0.0);
     }
+
+    // Assignment policy: GAN THEO THU TU (trai -> phai) theo block.
+    // Vi du: 2 trucks, 6 customers => idx 0..2 -> truck 0, idx 3..5 -> truck 1.
+    const int seq_len = (int)seq.size();
+    const int num_trucks = max(1, data.numTrucks);
+    auto truckForSeqIndex = [&](int idx) -> int {
+        if (seq_len <= 0) return 0;
+        long long tid = (long long)idx * (long long)num_trucks / (long long)seq_len;
+        if (tid < 0) tid = 0;
+        if (tid >= num_trucks) tid = num_trucks - 1;
+        return (int)tid;
+    };
+    auto blockEndExclusive = [&](int truck_id) -> int {
+        long long end = (long long)(truck_id + 1) * (long long)seq_len / (long long)num_trucks;
+        if (end < 0) end = 0;
+        if (end > seq_len) end = seq_len;
+        return (int)end;
+    };
     
     // Trang thai drone
     vector<double> Drone_Available_Time(data.numDrones, 0.0);
@@ -1168,7 +948,7 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
     int max_batch_size = max(3, (int)(data.numCustomers * 0.05));
     
     // Duyet tung khach hang trong sequence
-    for (int seq_idx = 0; seq_idx < seq.size(); ++seq_idx) {
+    for (int seq_idx = 0; seq_idx < (int)seq.size(); ++seq_idx) {
         int v_id = seq[seq_idx];
         if (!data.isCustomer(v_id)) continue;
         
@@ -1177,8 +957,7 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
         int v_demand = data.demands[v_id];
         int v_pairId = data.pairIds[v_id];
         double e_v = (double)v_ready;
-        
-        // ===== KIEM TRA P-DL PRECEDENCE CONSTRAINT =====
+      
         // Neu day la DL (delivery), phai kiem tra P tuong ung da duoc pickup chua
         if (v_type == "DL" && v_pairId > 0) {
             // Tim xe nao da pickup cap nay
@@ -1232,15 +1011,10 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
         }
         
         // ===== XU LY CAC LOAI KHACH HANG KHAC (P, D) =====
-        
-        // Chon xe tai ranh som nhat
-        int truck_id = 0;
-        for (int i = 1; i < data.numTrucks; ++i) {
-            if (trucks[i].available_time < trucks[truck_id].available_time) {
-                truck_id = i;
-            }
-        }
-        
+
+        // Chon truck theo block (trai -> phai)
+        int truck_id = truckForSeqIndex(seq_idx);
+        int block_end = blockEndExclusive(truck_id);
         TruckState& truck = trucks[truck_id];
         
         // PH╞»╞áNG ├üN A: ─Éi ngay lß║¡p tß╗⌐c (logic c┼⌐)
@@ -1257,6 +1031,7 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
             
             // Tim them khach hang P/DL trong sequence
             for (int i = seq_idx + 1; i < seq.size() && batch_customers.size() < max_batch_size; ++i) {
+                if (i >= block_end) break; // khong vuot qua block cua truck hien tai
                 int next_customer = seq[i];
                 if (data.isCustomer(next_customer) && 
                     (data.nodeTypes[next_customer] == "P" || data.nodeTypes[next_customer] == "DL")) {
@@ -1312,7 +1087,7 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
             // Tim cac customers co the consolidate trong 1 drone trip
             int drone_capacity = data.getDroneCapacity();
             vector<int> consolidation_candidates = findConsolidationCandidates(
-                seq, seq_idx, data, truck.current_position, drone_capacity
+                seq, seq_idx, block_end, data, truck.current_position, drone_capacity
             );
             
             // DISABLE CONSOLIDATION: Chi lay 1 customer per trip
@@ -1501,7 +1276,7 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
                     truck.current_position = cust_id;
                     truck.available_time = departure;
                 }
-                
+
                 // Kiem tra capacity
                 if (truck.current_load > data.truckCapacity) {
                     sol.totalPenalty += 1000;
@@ -1567,7 +1342,7 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
                 truck.route.push_back(v_id);
                 truck.arrival_times.push_back(T_Arr_Customer);
                 truck.departure_times.push_back(truck.available_time);
-                
+
                 // Giao h├áng ΓåÆ giß║úm load
                 truck.current_load -= v_demand; // ─É├ú giao h├áng cho kh├ích
                 truck.cargo_on_truck.erase(v_id); // X├│a khß╗Åi danh s├ích h├áng tr├¬n xe
@@ -1620,9 +1395,7 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
                 }
             }
             
-            // CHß╗îN PH╞»╞áNG ├üN Tß╗ÉT NHß║ñT Tß╗¬ A, B
             
-            // T├¼m ph╞░╞íng ├ín c├│ cost nhß╗Å nhß║Ñt
             double best_cost = cost_immediate;
             string best_strategy = "immediate";
             
@@ -1962,3 +1735,4 @@ PDPSolution decodeAndEvaluate(const vector<int>& seq, const PDPData& data) {
 
     return sol;
 }
+#endif

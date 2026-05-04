@@ -4,6 +4,7 @@
 #include "pdp_types.h"
 #include "pdp_cache.h"
 #include <vector>
+#include <algorithm>
 
 /**
  * @brief Core evaluation function: decode chromosome to solution and compute fitness.
@@ -25,7 +26,8 @@
  *   - truck_details: Complete execution timeline for each truck
  *   - resupply_events: All drone missions executed
  */
-PDPSolution decodeAndEvaluate(const std::vector<int>& seq, const PDPData& data);
+// Legacy heuristic decoder was removed from the main pipeline.
+// The solver now evaluates via decodeFromEncoding(const Chromosome&, ...).
 
 /**
  * @brief Wrapper function for decodeAndEvaluate with solution caching.
@@ -49,12 +51,22 @@ PDPSolution evaluateWithCache(
     SolutionCache& cache
 );
 
+// New primary evaluation entry point: full chromosome (sequence + assignments).
+PDPSolution evaluateWithCache(
+    const Chromosome& chromo,
+    const PDPData& data,
+    SolutionCache& cache
+);
+
 // Assignment encoding for Local Search post-processing
 struct AssignmentEncoding {
     std::vector<int> truck_assign;
     std::vector<int> drone_assign;
     std::vector<int> break_bit;
 };
+
+// Decode using explicit encoding. This is the intended fitness implementation.
+PDPSolution decodeFromEncoding(const Chromosome& chromo, const PDPData& data);
 
 AssignmentEncoding initFromSolution(
     const std::vector<int>& seq,
@@ -71,8 +83,26 @@ PDPSolution runAssignmentLS(
 
 // Convenience: run assignment LS on a decoded solution
 inline PDPSolution assignmentLSPostProcess(const std::vector<int>& seq, const PDPData& data) {
-    PDPSolution sol = decodeAndEvaluate(seq, data);
-    AssignmentEncoding enc = initFromSolution(seq, sol, data);
+    // Build a deterministic baseline encoding from sequence (no heuristic grouping).
+    // This keeps the helper usable without depending on legacy decodeAndEvaluate.
+    Chromosome chromo;
+    chromo.sequence = seq;
+    int n = (int)seq.size();
+    chromo.truck_assign.assign(n, 0);
+    chromo.drone_assign.assign(n, 0);
+    chromo.break_bit.assign(n, 1);
+    for (int i = 0; i < n; ++i) {
+        int t = (int)((1LL * i * data.numTrucks) / std::max(1, n));
+        if (t < 0) t = 0;
+        if (t >= data.numTrucks) t = std::max(0, data.numTrucks - 1);
+        chromo.truck_assign[i] = t;
+    }
+
+    PDPSolution sol = decodeFromEncoding(chromo, data);
+    AssignmentEncoding enc;
+    enc.truck_assign = chromo.truck_assign;
+    enc.drone_assign = chromo.drone_assign;
+    enc.break_bit = chromo.break_bit;
     PDPSolution ls_sol = runAssignmentLS(seq, enc, data, 200);
     double ls_cost = ls_sol.totalCost + ls_sol.totalPenalty * 1000.0;
     double cur_cost = sol.totalCost + sol.totalPenalty * 1000.0;

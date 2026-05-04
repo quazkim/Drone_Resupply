@@ -8,7 +8,7 @@
 
 using namespace std;
 
-// === C├üC H├ÇM TIß╗åN ├ìCH KHOß║óNG C├üCH (Manhattan/Euclidean) ===
+
 double manhattanDistance(double x1, double y1, double x2, double y2) {
     return abs(x1 - x2) + abs(y1 - y2);
 }
