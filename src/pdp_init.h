@@ -25,72 +25,100 @@ double getTruckDistance(const PDPData& data, int nodeA_id, int nodeB_id);
  */
 double getDroneDistance(const PDPData& data, int nodeA_id, int nodeB_id);
 
+// === CHROMOSOME BUILDING UTILITIES ===
+
 /**
- * @brief Convert a permutation sequence (chromosome) into multi-truck routes.
- * Splits sequence based on separator nodes to assign customers to trucks.
- * @param seq Customer sequence (chromosome representation)
- * @param data PDP instance
- * @return Vector of routes, one per truck
+ * @brief Chèn số 0 (Separator) cân bằng vào chuỗi khách hàng để chia tuyến cho các xe tải.
+ * @param pure_seq Chuỗi ID khách hàng
+ * @param numTrucks Số lượng xe tải
+ * @return Chuỗi đã chèn số 0
  */
-vector<vector<int>> decodeSeq(const vector<int>& seq, const PDPData& data);
+vector<int> insertBalancedSeparators(const vector<int>& pure_seq, int numTrucks);
+
+/**
+ * @brief Chuyển đổi chuỗi ID khách hàng (đã có separator 0) thành Chromosome.
+ *
+ * Thực hiện:
+ *   - Wrap: Mỗi node_id thành Gene{node_id, {}} (resupply_vector rỗng)
+ *   - Chèn Depot ảo (node_id = -1): chèn 1–3 điểm ngẫu nhiên vào giữa chuỗi,
+ *     không đứng cạnh nhau, không đứng ở đầu/cuối, và không kề separator.
+ *
+ * @param base_seq  Chuỗi ID khách hàng từ heuristic (Random, Greedy, Sweep, NN)
+ * @param gen       Random engine để chọn vị trí chèn
+ * @return Chromosome hoàn chỉnh (vector<Gene>) sẵn sàng đẩy vào population
+ */
+Chromosome buildFinalSequence(const vector<int>& base_seq, mt19937& gen);
 
 // === REPAIR OPERATORS ===
 
 /**
- * @brief Ensure chromosome validity by removing duplicates and adding missing customers.
- * Repairs infeasible chromosomes that may arise from genetic operators.
- * @param[in,out] seq Chromosome to repair
- * @param data PDP instance
- * @param gen Random number generator for stochastic repair decisions
+ * @brief Sửa chromosome: loại bỏ duplicate, thêm khách còn thiếu, đảm bảo P trước DL.
+ *
+ * Chỉ can thiệp vào các Gene có node_id > 0 (điểm khách hàng).
+ * Các phần tử node_id == 0 (separator) và node_id == -1 (depot return)
+ * hoàn toàn KHÔNG bị xóa, di chuyển hay thay đổi.
+ * resupply_vector của mọi Gene được giữ nguyên.
+ *
+ * @param[in,out] seq  Chromosome cần sửa (vector<Gene>)
+ * @param data         PDP instance
+ * @param gen          Random engine cho repair ngẫu nhiên
  */
-void quickRepairPDP(vector<int>& seq, const PDPData& data, mt19937& gen);
+void quickRepairPDP(Chromosome& seq, const PDPData& data, mt19937& gen);
 
 // === INITIALIZATION STRATEGIES ===
 
 /**
- * @brief Create diverse initial population using multiple construction heuristics.
- * Combines Random, Greedy Time, Sweep, and Nearest Neighbor strategies
- * to maximize population diversity for genetic search.
- * @param populationSize Desired number of individuals
- * @param data PDP instance
- * @param runNumber Seed parameter for reproducibility
- * @return Vector of initial chromosome solutions
+ * @brief Tạo quần thể ban đầu đa dạng từ 4 heuristic kết hợp.
+ *
+ * Tỷ lệ: 10% Random, 30% Greedy Time, 30% Sweep, 30% Nearest Neighbor.
+ * Mỗi cá thể được chuyển thành Chromosome qua buildFinalSequence().
+ *
+ * @param populationSize Số cá thể mong muốn
+ * @param data           PDP instance
+ * @param runNumber      Seed phụ để đảm bảo tái lập (reproducibility)
+ * @return vector<Chromosome> — quần thể ban đầu
  */
-vector<vector<int>> initStructuredPopulationPDP(int populationSize, const PDPData& data, int runNumber = 1);
+vector<Chromosome> initStructuredPopulationPDP(
+    int populationSize, const PDPData& data, int runNumber = 1);
 
 /**
- * @brief Generate population with completely random sequences.
- * @param populationSize Number of individuals
- * @param data PDP instance
- * @return Vector of random chromosomes
+ * @brief Tạo quần thể bằng cách xáo ngẫu nhiên danh sách khách hàng.
+ * @param populationSize Số cá thể
+ * @param data           PDP instance
+ * @param gen            Random engine dùng chung (seed nhất quán)
+ * @return vector<Chromosome>
  */
-vector<vector<int>> initRandomPDP(int populationSize, const PDPData& data);
+vector<Chromosome> initRandomPDP(
+    int populationSize, const PDPData& data, mt19937& gen);
 
 /**
- * @brief Generate population using Sweep algorithm (polar angle ordering).
- * Orders customers by angle from depot center for structured solution diversity.
- * @param populationSize Number of individuals
- * @param data PDP instance
- * @return Vector of sweep-based chromosomes
+ * @brief Tạo quần thể theo heuristic Greedy Time (ưu tiên ready_time sớm nhất).
+ * @param populationSize Số cá thể
+ * @param data           PDP instance
+ * @param gen            Random engine dùng chung
+ * @return vector<Chromosome>
  */
-vector<vector<int>> initSweepPDP(int populationSize, const PDPData& data);
+vector<Chromosome> initGreedyTimePDP(
+    int populationSize, const PDPData& data, mt19937& gen);
 
 /**
- * @brief Generate population using Greedy Time heuristic.
- * Prioritizes customers with earliest ready times for time-window feasibility.
- * @param populationSize Number of individuals
- * @param data PDP instance
- * @return Vector of greedy-constructed chromosomes
+ * @brief Tạo quần thể theo thuật toán Sweep (sắp xếp theo góc cực từ depot).
+ * @param populationSize Số cá thể
+ * @param data           PDP instance
+ * @param gen            Random engine dùng chung
+ * @return vector<Chromosome>
  */
-vector<vector<int>> initGreedyTimePDP(int populationSize, const PDPData& data);
+vector<Chromosome> initSweepPDP(
+    int populationSize, const PDPData& data, mt19937& gen);
 
 /**
- * @brief Generate population using Nearest Neighbor constructive heuristic.
- * Each individual built by repeatedly selecting nearest unserved customer.
- * @param populationSize Number of individuals
- * @param data PDP instance
- * @return Vector of nearest-neighbor chromosomes
+ * @brief Tạo quần thể theo heuristic Nearest Neighbor (chọn khách gần nhất kế tiếp).
+ * @param populationSize Số cá thể
+ * @param data           PDP instance
+ * @param gen            Random engine dùng chung
+ * @return vector<Chromosome>
  */
-vector<vector<int>> initNearestNeighborPDP(int populationSize, const PDPData& data);
+vector<Chromosome> initNearestNeighborPDP(
+    int populationSize, const PDPData& data, mt19937& gen);
 
-#endif
+#endif // PDP_INIT_H

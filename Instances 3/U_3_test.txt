@@ -1,0 +1,4 @@
+# id X Y type ready_time pair_id
+1 0 20 D 20 0
+2 0 40 D 60 0
+3 0 60 D 30 0

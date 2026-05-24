@@ -4,79 +4,70 @@
 #include "pdp_types.h"
 #include "pdp_cache.h"
 #include <vector>
+#include <string>
+
+
+
+// ============================================================
+// === API MỚI: GIẢI MÃ CHUỖI SeqStop ===
+// ============================================================
 
 /**
- * @brief Core evaluation function: decode chromosome to solution and compute fitness.
- * 
- * Process:
- * 1. Interpret sequence as customer ordering
- * 2. Greedily assign each customer to the truck with earliest availability
- * 3. For each truck route, optimize drone resupply missions
- * 4. Compute total makespan (C_max) and time-window violation penalties
- * 
- * @param seq Chromosome - permutation sequence representing customer service order
- * @param data PDP instance with all problem parameters and constraints
- * 
- * @return PDPSolution containing:
- *   - routes: Assignment of customers to trucks
- *   - totalCost: Makespan objective value C_max
- *   - totalPenalty: Sum of constraint violation penalties
- *   - isFeasible: true if all time windows and endurance constraints satisfied
- *   - truck_details: Complete execution timeline for each truck
- *   - resupply_events: All drone missions executed
+ * @brief Giải mã chuỗi SeqStop thành lộ trình chi tiết cho 2 xe tải + drone.
+ *
+ * Quy ước phân chia lộ trình:
+ *   - Phần tử với node_id == 0 là vách ngăn: trước thuộc Truck 1, sau thuộc Truck 2.
+ *   - Phần tử với node_id == -1 là lệnh quay về Depot: dỡ C2, nhận C1.
+ *   - Phần tử với node_id > 0 là điểm khách hàng.
+ *
+ * Logic tại mỗi điểm dừng (node_id > 0):
+ *   1. Delivery (nếu hàng đã có trên xe) → giảm tải
+ *   2. Drone resupply (nhận hàng từ drone theo resupply_vector) → tăng tải
+ *   3. Pickup (lấy hàng lên xe nếu điểm là loại P) → tăng tải
+ *   4. Kiểm tra tải trọng (current_load <= M_T) trước khi rời điểm
+ *
+ * @param seq       Chuỗi mã hóa theo định dạng mới (vector<SeqStop>)
+ * @param data      Thông tin bài toán PDP
+ * @param throw_on_infeasible  Nếu true: ném InfeasibleException khi vi phạm capacity.
+ *                              Nếu false (mặc định): cộng penalty vào totalPenalty.
+ * @return PDPSolution chứa makespan (totalCost), penalty, chi tiết xe tải, drone.
  */
-PDPSolution decodeAndEvaluate(const std::vector<int>& seq, const PDPData& data);
+PDPSolution decode_sequence(
+    const std::vector<SeqStop>& seq,
+    const PDPData& data,
+    bool throw_on_infeasible = false
+);
 
 /**
- * @brief Wrapper function for decodeAndEvaluate with solution caching.
- * 
- * Checks cache first (O(1) lookup). If sequence is found, returns cached solution.
- * Otherwise, calls decodeAndEvaluate, stores result in cache, and returns.
- * 
- * Usage:
- *   SolutionCache cache;
- *   PDPSolution sol = evaluateWithCache(population[i], data, cache);
- * 
- * @param seq Customer sequence (cache key)
- * @param data PDP instance
- * @param cache Reference to SolutionCache object maintaining state across evals
- * 
- * @return PDPSolution with all details (truck_details, resupply_events accessible for post-processing)
+ * @brief In lộ trình chi tiết của 2 xe tải và thứ tự bay của drone ra stdout.
+ * Dùng để debug / visualization kết quả decode_sequence().
+ *
+ * @param sol  Kết quả từ decode_sequence()
+ * @param data Thông tin bài toán
  */
-PDPSolution evaluateWithCache(
-    const std::vector<int>& seq,
-    const PDPData& data,
-    SolutionCache& cache
-);
+void print_decoded_routes(const PDPSolution& sol, const PDPData& data);
 
-// Assignment encoding for Local Search post-processing
-struct AssignmentEncoding {
-    std::vector<int> truck_assign;
-    std::vector<int> drone_assign;
-    std::vector<int> break_bit;
-};
+/**
+ * @brief Bridge: chuyển vector<int> node_ids → vector<SeqStop>, decode, trả PDPSolution.
+ * Sử dụng SolutionCache để tránh decode lại cùng một sequence.
+ *
+ * @param sequence  Chuỗi node_id (bao gồm 0=separator, -1=depot-return, >0=customer)
+ * @param data      Thông tin bài toán
+ * @param cache     Cache object
+ * @return PDPSolution
+ */
+PDPSolution evaluateWithCache(const std::vector<int>& sequence,
+                              const PDPData& data,
+                              SolutionCache& cache);
 
-AssignmentEncoding initFromSolution(
-    const std::vector<int>& seq,
-    const PDPSolution& sol,
-    const PDPData& data
-);
-
-PDPSolution runAssignmentLS(
-    const std::vector<int>& seq,
-    AssignmentEncoding& enc,
-    const PDPData& data,
-    int max_iter
-);
-
-// Convenience: run assignment LS on a decoded solution
-inline PDPSolution assignmentLSPostProcess(const std::vector<int>& seq, const PDPData& data) {
-    PDPSolution sol = decodeAndEvaluate(seq, data);
-    AssignmentEncoding enc = initFromSolution(seq, sol, data);
-    PDPSolution ls_sol = runAssignmentLS(seq, enc, data, 200);
-    double ls_cost = ls_sol.totalCost + ls_sol.totalPenalty * 1000.0;
-    double cur_cost = sol.totalCost + sol.totalPenalty * 1000.0;
-    return (ls_cost < cur_cost - 0.01) ? ls_sol : sol;
-}
+/**
+ * @brief Bridge đơn giản (không cache): chuyển vector<int> → decode_sequence.
+ *
+ * @param sequence  Chuỗi node_id
+ * @param data      Thông tin bài toán
+ * @return PDPSolution
+ */
+PDPSolution decodeAndEvaluate(const std::vector<int>& sequence,
+                              const PDPData& data);
 
 #endif // PDP_FITNESS_H

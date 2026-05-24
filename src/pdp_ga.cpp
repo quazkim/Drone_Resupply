@@ -1,4 +1,4 @@
-﻿#include "pdp_ga.h"
+#include "pdp_ga.h"
 #include "pdp_tabu.h"
 #include "pdp_types.h"
 #include "pdp_fitness.h"
@@ -12,1132 +12,620 @@
 #include <iostream>
 #include <limits>
 #include <iomanip>
-#include <climits>
 #include <numeric>
 #include <unordered_set>
-
 using namespace std;
 
-// ============ ADAPTIVE PARAMETERS ============
+// ---- Bridge: Chromosome → vector<int> for evaluateWithCache ----
+static vector<int> chrToIds(const Chromosome& c) {
+    vector<int> v; v.reserve(c.size());
+    for (auto& g : c) v.push_back(g.node_id);
+    return v;
+}
+static PDPSolution evalChr(const Chromosome& c, const PDPData& d, SolutionCache& cache) {
+    return evaluateWithCache(chrToIds(c), d, cache);
+}
+
+// ---- AdaptiveParams ----
 struct AdaptiveParams {
-    // Crossover success rates
-    vector<double> crossoverSuccess;
-    vector<int> crossoverUsage;
-    vector<double> crossoverRates;
-    
-    // Mutation success rates
-    vector<double> mutationSuccess;
-    vector<int> mutationUsage;
-    vector<double> mutationRates;
-    
-    // Adaptive mutation rate
-    double currentMutationRate;
-    double baseMutationRate;
+    vector<double> crossoverSuccess, crossoverRates;
+    vector<int>    crossoverUsage;
+    vector<double> mutationSuccess, mutationRates;
+    vector<int>    mutationUsage;
+    double currentMutationRate, baseMutationRate;
     int noImprovementCount;
-    
-    AdaptiveParams(double baseRate) : 
-        crossoverSuccess(4, 0.0), crossoverUsage(4, 0), crossoverRates(4, 0.25),
-        mutationSuccess(5, 0.0), mutationUsage(5, 0), mutationRates(5, 0.2),
-        currentMutationRate(baseRate), baseMutationRate(baseRate), noImprovementCount(0) {}
-    
-    // Cß║¡p nhß║¡t success rate cho crossover
-    void updateCrossoverSuccess(int type, bool improved) {
-        crossoverUsage[type]++;
-        if (improved) crossoverSuccess[type]++;
-    }
-    
-    // Cß║¡p nhß║¡t success rate cho mutation
-    void updateMutationSuccess(int type, bool improved) {
-        mutationUsage[type]++;
-        if (improved) mutationSuccess[type]++;
-    }
-    
-    // ─Éiß╗üu chß╗ënh crossover rates dß╗▒a tr├¬n success rate
+
+    AdaptiveParams(double base) :
+        crossoverSuccess(4,0), crossoverRates(4,0.25), crossoverUsage(4,0),
+        mutationSuccess(6,0),  mutationRates(6,1.0/6), mutationUsage(6,0),
+        currentMutationRate(base), baseMutationRate(base), noImprovementCount(0) {}
+
+    void updateCrossoverSuccess(int t, bool ok){ crossoverUsage[t]++; if(ok) crossoverSuccess[t]++; }
+    void updateMutationSuccess (int t, bool ok){ mutationUsage[t]++;  if(ok) mutationSuccess[t]++;  }
+
     void adaptCrossoverRates() {
-        double totalSuccess = 0;
-        for (int i = 0; i < 4; ++i) {
-            if (crossoverUsage[i] > 0) {
-                totalSuccess += crossoverSuccess[i] / crossoverUsage[i];
-            }
-        }
-        
-        if (totalSuccess > 0) {
-            for (int i = 0; i < 4; ++i) {
-                if (crossoverUsage[i] > 0) {
-                    double successRate = crossoverSuccess[i] / crossoverUsage[i];
-                    crossoverRates[i] = 0.1 + 0.8 * (successRate / totalSuccess);
-                } else {
-                    crossoverRates[i] = 0.25;
-                }
-            }
-        }
+        double tot=0; for(int i=0;i<4;i++) if(crossoverUsage[i]>0) tot+=crossoverSuccess[i]/crossoverUsage[i];
+        if(tot>0) for(int i=0;i<4;i++) crossoverRates[i]= crossoverUsage[i]>0? 0.1+0.8*(crossoverSuccess[i]/crossoverUsage[i])/tot : 0.25;
     }
-    
-    // ─Éiß╗üu chß╗ënh mutation rates dß╗▒a tr├¬n success rate
     void adaptMutationRates() {
-        double totalSuccess = 0;
-        for (int i = 0; i < 5; ++i) {
-            if (mutationUsage[i] > 0) {
-                totalSuccess += mutationSuccess[i] / mutationUsage[i];
-            }
-        }
-        
-        if (totalSuccess > 0) {
-            for (int i = 0; i < 5; ++i) {
-                if (mutationUsage[i] > 0) {
-                    double successRate = mutationSuccess[i] / mutationUsage[i];
-                    mutationRates[i] = 0.05 + 0.9 * (successRate / totalSuccess);
-                } else {
-                    mutationRates[i] = 0.2;
-                }
-            }
-        }
+        double tot=0; for(int i=0;i<6;i++) if(mutationUsage[i]>0) tot+=mutationSuccess[i]/mutationUsage[i];
+        if(tot>0) for(int i=0;i<6;i++) mutationRates[i]= mutationUsage[i]>0? 0.05+0.9*(mutationSuccess[i]/mutationUsage[i])/tot : 1.0/6;
     }
-    
-    // ─Éiß╗üu chß╗ënh mutation rate tß╗òng thß╗â
     void adaptMutationRate() {
-        if (noImprovementCount > 5) {
-            currentMutationRate = min(0.5, currentMutationRate * 1.2);
-        } else if (noImprovementCount < 2) {
-            currentMutationRate = max(baseMutationRate * 0.5, currentMutationRate * 0.9);
-        }
+        if(noImprovementCount>5)     currentMutationRate=min(0.5, currentMutationRate*1.2);
+        else if(noImprovementCount<2) currentMutationRate=max(baseMutationRate*0.5, currentMutationRate*0.9);
     }
-    
-    // Chß╗ìn crossover type dß╗▒a tr├¬n rates
-    int selectCrossoverType(mt19937& gen) {
-        discrete_distribution<> dist(crossoverRates.begin(), crossoverRates.end());
-        return dist(gen);
-    }
-    
-    // Chß╗ìn mutation type dß╗▒a tr├¬n rates
-    int selectMutationType(mt19937& gen) {
-        discrete_distribution<> dist(mutationRates.begin(), mutationRates.end());
-        return dist(gen);
-    }
+    int selectCrossoverType(mt19937& g){ discrete_distribution<> d(crossoverRates.begin(),crossoverRates.end()); return d(g); }
+    int selectMutationType (mt19937& g){ discrete_distribution<> d(mutationRates.begin(), mutationRates.end());  return d(g); }
 };
 
 struct OnlineSurrogate {
-    int n = 0;
-    double sumX = 0.0;
-    double sumY = 0.0;
-    double sumXX = 0.0;
-    double sumXY = 0.0;
-
-    void update(double x, double y) {
-        n++;
-        sumX += x;
-        sumY += y;
-        sumXX += x * x;
-        sumXY += x * y;
-    }
-
-    bool ready() const {
-        return n >= 30;
-    }
-
-    double predict(double x, double fallback) const {
-        if (n < 2) return fallback;
-        double denom = n * sumXX - sumX * sumX;
-        if (fabs(denom) < 1e-9) return fallback;
-        double a = (n * sumXY - sumX * sumY) / denom;
-        double b = (sumY - a * sumX) / n;
-        double y = a * x + b;
-        if (!isfinite(y)) return fallback;
-        return y;
+    int n=0; double sumX=0,sumY=0,sumXX=0,sumXY=0;
+    void update(double x,double y){n++;sumX+=x;sumY+=y;sumXX+=x*x;sumXY+=x*y;}
+    bool ready() const { return n>=30; }
+    double predict(double x, double fb) const {
+        if(n<2) return fb;
+        double d=n*sumXX-sumX*sumX;
+        if(fabs(d)<1e-9) return fb;
+        double a=(n*sumXY-sumX*sumY)/d, b=(sumY-a*sumX)/n, y=a*x+b;
+        return isfinite(y)?y:fb;
     }
 };
 
-static double edgeNoveltyScore(const vector<int>& seq, const vector<int>& reference) {
-    if (seq.size() < 2 || reference.size() < 2 || seq.size() != reference.size()) return 1.0;
-    unordered_set<long long> refEdges;
-    refEdges.reserve(reference.size() * 2);
-    auto edgeKey = [](int a, int b) -> long long {
-        return (static_cast<long long>(a) << 32) ^ static_cast<unsigned int>(b);
-    };
-
-    for (size_t i = 0; i + 1 < reference.size(); ++i) {
-        refEdges.insert(edgeKey(reference[i], reference[i + 1]));
-    }
-
-    int overlap = 0;
-    for (size_t i = 0; i + 1 < seq.size(); ++i) {
-        if (refEdges.count(edgeKey(seq[i], seq[i + 1])) > 0) overlap++;
-    }
-
-    int totalEdges = max(1, (int)seq.size() - 1);
-    return 1.0 - (double)overlap / totalEdges;
+// ---- Edge novelty (Chromosome version, compare node_ids) ----
+static double edgeNoveltyScore(const Chromosome& seq, const Chromosome& ref) {
+    if(seq.size()<2||ref.size()<2||seq.size()!=ref.size()) return 1.0;
+    unordered_set<long long> refE; refE.reserve(ref.size()*2);
+    auto ek=[](int a,int b){ return (static_cast<long long>(a)<<32)^static_cast<unsigned>(b); };
+    for(size_t i=0;i+1<ref.size();i++) refE.insert(ek(ref[i].node_id,ref[i+1].node_id));
+    int overlap=0;
+    for(size_t i=0;i+1<seq.size();i++) if(refE.count(ek(seq[i].node_id,seq[i+1].node_id))) overlap++;
+    return 1.0-(double)overlap/max(1,(int)seq.size()-1);
 }
 
-// ============ PERTURBATION OPERATORS (for Tabu diversification) ============
-
-// Double-bridge perturbation: splits sequence into 4 parts and reassembles
-vector<int> doubleBridgePerturbation(const vector<int>& seq, mt19937& gen) {
-    int n = seq.size();
-    if (n < 8) return seq; // too small
-    
-    uniform_int_distribution<> dist(1, n - 2);
-    vector<int> cuts;
-    set<int> cutSet;
-    while ((int)cuts.size() < 3) {
-        int c = dist(gen);
-        if (cutSet.find(c) == cutSet.end()) {
-            cuts.push_back(c);
-            cutSet.insert(c);
-        }
-    }
-    sort(cuts.begin(), cuts.end());
-    
-    // Split into 4 segments: [0,c1), [c1,c2), [c2,c3), [c3,n)
-    vector<int> result;
-    // Reassemble as: segment0, segment2, segment1, segment3
-    for (int i = 0; i < cuts[0]; i++) result.push_back(seq[i]);
-    for (int i = cuts[1]; i < cuts[2]; i++) result.push_back(seq[i]);
-    for (int i = cuts[0]; i < cuts[1]; i++) result.push_back(seq[i]);
-    for (int i = cuts[2]; i < n; i++) result.push_back(seq[i]);
-    return result;
+// ---- Perturbation operators ----
+Chromosome doubleBridgePerturbation(const Chromosome& seq, mt19937& gen) {
+    int n=seq.size(); if(n<8) return seq;
+    uniform_int_distribution<> d(1,n-2);
+    set<int> cs; vector<int> cuts;
+    while((int)cuts.size()<3){ int c=d(gen); if(!cs.count(c)){cuts.push_back(c);cs.insert(c);} }
+    sort(cuts.begin(),cuts.end());
+    Chromosome r;
+    for(int i=0;      i<cuts[0];i++) r.push_back(seq[i]);
+    for(int i=cuts[1];i<cuts[2];i++) r.push_back(seq[i]);
+    for(int i=cuts[0];i<cuts[1];i++) r.push_back(seq[i]);
+    for(int i=cuts[2];i<n;      i++) r.push_back(seq[i]);
+    return r;
 }
 
-// Ruin-recreate perturbation: remove k random customers and reinsert at random positions
-vector<int> ruinRecreatePerturbation(const vector<int>& seq, mt19937& gen, double ruinRatio = 0.3) {
-    int n = seq.size();
-    int k = max(2, (int)(n * ruinRatio));
-    
-    // Select k random positions to remove
-    vector<int> indices(n);
-    iota(indices.begin(), indices.end(), 0);
-    shuffle(indices.begin(), indices.end(), gen);
-    
-    set<int> removeSet(indices.begin(), indices.begin() + k);
-    
-    vector<int> removed;
-    vector<int> remaining;
-    for (int i = 0; i < n; i++) {
-        if (removeSet.count(i)) {
-            removed.push_back(seq[i]);
-        } else {
-            remaining.push_back(seq[i]);
-        }
-    }
-    
-    // Reinsert removed customers at random positions
-    shuffle(removed.begin(), removed.end(), gen);
-    for (int cust : removed) {
-        uniform_int_distribution<> posDist(0, (int)remaining.size());
-        int pos = posDist(gen);
-        remaining.insert(remaining.begin() + pos, cust);
+Chromosome ruinRecreatePerturbation(const Chromosome& seq, mt19937& gen, double ratio) {
+    int n=seq.size(), k=max(2,(int)(n*ratio));
+    vector<int> idx(n); iota(idx.begin(),idx.end(),0);
+    shuffle(idx.begin(),idx.end(),gen);
+    set<int> rm(idx.begin(),idx.begin()+k);
+    vector<Gene> removed, remaining;
+    for(int i=0;i<n;i++) (rm.count(i)?removed:remaining).push_back(seq[i]);
+    shuffle(removed.begin(),removed.end(),gen);
+    for(auto& g:removed){
+        uniform_int_distribution<> p(0,(int)remaining.size());
+        remaining.insert(remaining.begin()+p(gen),g);
     }
     return remaining;
 }
 
-// ============ CROSSOVER OPERATORS ============
+// ---- Crossover helpers ----
+// Split: extract customer genes + record special-node positions from parent1
+static void splitChromosome(const Chromosome& p,
+                             vector<Gene>& custs,
+                             vector<pair<int,Gene>>& specials) {
+    for(int i=0;i<(int)p.size();i++) {
+        if(p[i].node_id>0) custs.push_back(p[i]);
+        else                specials.push_back({i,p[i]});
+    }
+}
 
-// Order Crossover (OX)
-vector<int> orderCrossover(const vector<int>& parent1, const vector<int>& parent2, mt19937& gen) {
-    int n = parent1.size();
-    vector<int> child(n, -1);
-    
-    uniform_int_distribution<> dist(0, n - 1);
-    int cut1 = dist(gen);
-    int cut2 = dist(gen);
-    if (cut1 > cut2) swap(cut1, cut2);
-    
-    // Copy segment from parent1
-    for (int i = cut1; i <= cut2; ++i) {
-        child[i] = parent1[i];
+// Reassemble: fill child_cust into skeleton, inserting specials at original relative positions
+static Chromosome reassemble(const vector<Gene>& child_cust,
+                              const vector<pair<int,Gene>>& specials,
+                              int parent_len) {
+    // Build a result of size parent_len
+    // specials are at their original indices in parent1
+    Chromosome result(parent_len);
+    // Mark special positions
+    set<int> spos; for(auto& s:specials) spos.insert(s.first);
+    // Fill specials
+    for(auto& s:specials) result[s.first]=s.second;
+    // Fill customer slots in order
+    int ci=0;
+    for(int i=0;i<parent_len;i++) {
+        if(!spos.count(i)) result[i]=child_cust[ci++];
     }
-    
-    // Fill remaining from parent2
-    set<int> used;
-    for (int i = cut1; i <= cut2; ++i) {
-        used.insert(parent1[i]);
+    return result;
+}
+
+// ---- One-Point Crossover (free-style, includes 0/-1) ----
+Chromosome onePointCrossover(const Chromosome& p1, const Chromosome& p2, mt19937& gen) {
+    int n = (int)p1.size();
+    if (n == 0 || (int)p2.size() != n) return p1;
+
+    uniform_int_distribution<> d(1, n - 1);
+    int cut = d(gen);
+
+    Chromosome child;
+    child.reserve(n);
+
+    set<int> used_customers;
+    for (int i = 0; i < cut; ++i) {
+        child.push_back(p1[i]);
+        if (p1[i].node_id > 0) used_customers.insert(p1[i].node_id);
     }
-    
-    int childIdx = (cut2 + 1) % n;
-    int parentIdx = (cut2 + 1) % n;
-    
-    while (childIdx != cut1) {
-        if (used.find(parent2[parentIdx]) == used.end()) {
-            child[childIdx] = parent2[parentIdx];
-            used.insert(parent2[parentIdx]);
-            childIdx = (childIdx + 1) % n;
+
+    for (int i = 0; i < n && (int)child.size() < n; ++i) {
+        const Gene& g = p2[i];
+        if (g.node_id > 0) {
+            if (used_customers.count(g.node_id)) continue;
+            used_customers.insert(g.node_id);
         }
-        parentIdx = (parentIdx + 1) % n;
+        child.push_back(g);
     }
-    
+
     return child;
 }
 
-// Partially Mapped Crossover (PMX)
-vector<int> pmxCrossover(const vector<int>& parent1, const vector<int>& parent2, mt19937& gen) {
-    int n = parent1.size();
-    vector<int> child = parent1;
-    
-    uniform_int_distribution<> dist(0, n - 1);
-    int cut1 = dist(gen);
-    int cut2 = dist(gen);
-    if (cut1 > cut2) swap(cut1, cut2);
-    
-    map<int, int> mapping;
-    for (int i = cut1; i <= cut2; ++i) {
-        mapping[parent1[i]] = parent2[i];
-        child[i] = parent2[i];
+// ---- OX Crossover (free-style, allows 0/-1) ----
+Chromosome orderCrossover(const Chromosome& p1, const Chromosome& p2, mt19937& gen) {
+    int n = (int)p1.size();
+    if (n == 0 || (int)p2.size() != n) return p1;
+
+    uniform_int_distribution<> d(0, n - 1);
+    int a = d(gen), b = d(gen);
+    if (a > b) swap(a, b);
+
+    Chromosome child(n, Gene(0));
+    for (auto& g : child) g.resupply_vector.clear();
+
+    set<int> used_customers;
+    for (int i = a; i <= b; ++i) {
+        child[i] = p1[i];
+        if (p1[i].node_id > 0) used_customers.insert(p1[i].node_id);
     }
-    
+
+    int ci = (b + 1) % n;
+    int pi = (b + 1) % n;
+    while (ci != a) {
+        const Gene& cand = p2[pi];
+        if (cand.node_id > 0) {
+            if (!used_customers.count(cand.node_id)) {
+                child[ci] = cand;
+                used_customers.insert(cand.node_id);
+                ci = (ci + 1) % n;
+            }
+        } else {
+            child[ci] = cand;
+            ci = (ci + 1) % n;
+        }
+        pi = (pi + 1) % n;
+    }
+
+    return child;
+}
+
+// ---- PMX Crossover ----
+Chromosome pmxCrossover(const Chromosome& p1, const Chromosome& p2, mt19937& gen) {
+    vector<Gene> c1, c2;
+    vector<pair<int, Gene>> spec;
+    splitChromosome(p1, c1, spec);
+    for (auto& g : p2) if (g.node_id > 0) c2.push_back(g);
+
+    int n = (int)c1.size();
+    if (n == 0) return p1;
+
+    uniform_int_distribution<> d(0, n - 1);
+    int a = d(gen), b = d(gen);
+    if (a > b) swap(a, b);
+
+    vector<Gene> child = c1;
+    map<int, int> mapping; // c1.node_id -> c2.node_id
+    for (int i = a; i <= b; ++i) {
+        mapping[c1[i].node_id] = c2[i].node_id;
+        child[i] = c2[i];
+    }
+
+    map<int, Gene> gene1, gene2;
+    for (const auto& g : c1) gene1[g.node_id] = g;
+    for (const auto& g : c2) gene2[g.node_id] = g;
+
     for (int i = 0; i < n; ++i) {
-        if (i >= cut1 && i <= cut2) continue;
-        
-        int value = parent1[i];
-        while (mapping.find(value) != mapping.end()) {
-            value = mapping[value];
-        }
-        child[i] = value;
+        if (i >= a && i <= b) continue;
+        int v = c1[i].node_id;
+        while (mapping.count(v)) v = mapping[v];
+        auto it2 = gene2.find(v);
+        if (it2 != gene2.end()) child[i] = it2->second;
+        else if (gene1.count(v)) child[i] = gene1[v];
     }
-    
-    return child;
+
+    return reassemble(child, spec, (int)p1.size());
 }
 
-// Cycle Crossover (CX)
-vector<int> cycleCrossover(const vector<int>& parent1, const vector<int>& parent2, mt19937& gen) {
-    int n = parent1.size();
-    vector<int> child(n, -1);
+// ---- CX Crossover ----
+Chromosome cycleCrossover(const Chromosome& p1, const Chromosome& p2, mt19937& gen) {
+    vector<Gene> c1, c2;
+    vector<pair<int, Gene>> spec;
+    splitChromosome(p1, c1, spec);
+    for (auto& g : p2) if (g.node_id > 0) c2.push_back(g);
+
+    int n = (int)c1.size();
+    if (n == 0) return p1;
+
+    map<int, int> pos1;
+    for (int i = 0; i < n; ++i) pos1[c1[i].node_id] = i;
+
+    vector<Gene> child(n, Gene(0));
+    for (auto& g : child) g.resupply_vector.clear();
+
     vector<bool> visited(n, false);
-    
-    uniform_int_distribution<> coin(0, 1);
-    bool useParent1 = coin(gen);
-    
+    bool take_from_p1 = true;
     for (int start = 0; start < n; ++start) {
         if (visited[start]) continue;
-        
         int idx = start;
         do {
             visited[idx] = true;
-            child[idx] = useParent1 ? parent1[idx] : parent2[idx];
-            
-            int value = useParent1 ? parent2[idx] : parent1[idx];
-            idx = find(parent1.begin(), parent1.end(), value) - parent1.begin();
+            child[idx] = take_from_p1 ? c1[idx] : c2[idx];
+            int next_id = take_from_p1 ? c2[idx].node_id : c1[idx].node_id;
+            idx = pos1.count(next_id) ? pos1[next_id] : start;
         } while (idx != start);
-        
-        useParent1 = !useParent1;
+        take_from_p1 = !take_from_p1;
     }
-    
-    return child;
+
+    return reassemble(child, spec, (int)p1.size());
 }
 
-// Edge Recombination Crossover (ERX) - Bß║úo to├án c├íc cß║ính tß╗½ cha mß║╣
-vector<int> edgeCrossover(const vector<int>& parent1, const vector<int>& parent2, mt19937& gen) {
-    int n = parent1.size();
-    vector<int> child;
-    
-    // Tß║ío bß║úng adjacency tß╗½ cß║ú hai cha mß║╣
-    map<int, set<int>> edges;
-    
-    // Th├¬m edges tß╗½ parent1
-    for (int i = 0; i < n; ++i) {
-        int current = parent1[i];
-        int prev = parent1[(i - 1 + n) % n];
-        int next = parent1[(i + 1) % n];
-        edges[current].insert(prev);
-        edges[current].insert(next);
-    }
-    
-    // Th├¬m edges tß╗½ parent2
-    for (int i = 0; i < n; ++i) {
-        int current = parent2[i];
-        int prev = parent2[(i - 1 + n) % n];
-        int next = parent2[(i + 1) % n];
-        edges[current].insert(prev);
-        edges[current].insert(next);
-    }
-    
-    // Bß║»t ─æß║ºu vß╗¢i node ngß║½u nhi├¬n
-    uniform_int_distribution<> dist(0, n - 1);
-    int current = parent1[dist(gen)];
-    child.push_back(current);
-    
-    set<int> used;
-    used.insert(current);
-    
-    while (child.size() < n) {
-        // X├│a current khß╗Åi tß║Ñt cß║ú adjacency lists
-        for (auto& pair : edges) {
-            pair.second.erase(current);
-        }
-        
-        int next = -1;
-        
-        // T├¼m neighbor vß╗¢i ├¡t connections nhß║Ñt
-        int minConnections = INT_MAX;
-        for (int neighbor : edges[current]) {
-            if (used.find(neighbor) == used.end()) {
-                int connections = edges[neighbor].size();
-                if (connections < minConnections) {
-                    minConnections = connections;
-                    next = neighbor;
-                }
-            }
-        }
-        
-        // Nß║┐u kh├┤ng t├¼m thß║Ñy, chß╗ìn node ch╞░a d├╣ng ngß║½u nhi├¬n
-        if (next == -1) {
-            vector<int> unused;
-            for (int i = 0; i < n; ++i) {
-                int node = parent1[i];
-                if (used.find(node) == used.end()) {
-                    unused.push_back(node);
-                }
-            }
-            if (!unused.empty()) {
-                uniform_int_distribution<> unusedDist(0, unused.size() - 1);
-                next = unused[unusedDist(gen)];
-            }
-        }
-        
-        if (next != -1) {
-            child.push_back(next);
-            used.insert(next);
-            current = next;
-        } else {
-            break; // Kh├┤ng thß╗â tiß║┐p tß╗Ñc
-        }
-    }
-    
-    // ─Éß║úm bß║úo child c├│ ─æß╗º n phß║ºn tß╗¡
-    if (child.size() < n) {
-        for (int i = 0; i < n; ++i) {
-            int node = parent1[i];
-            if (used.find(node) == used.end()) {
-                child.push_back(node);
-                used.insert(node);
-            }
-        }
-    }
-    
-    return child;
+// ---- Mutation operators (operate on full Chromosome incl. 0/-1) ----
+void swapMutation(Chromosome& s, mt19937& g) {
+    if(s.size()<2) return;
+    uniform_int_distribution<> d(0,s.size()-1);
+    swap(s[d(g)],s[d(g)]);
+}
+void inversionMutation(Chromosome& s, mt19937& g) {
+    if(s.size()<2) return;
+    uniform_int_distribution<> d(0,s.size()-1);
+    int a=d(g),b=d(g); if(a>b) swap(a,b);
+    reverse(s.begin()+a,s.begin()+b+1);
+}
+void scrambleMutation(Chromosome& s, mt19937& g) {
+    if(s.size()<2) return;
+    uniform_int_distribution<> d(0,s.size()-1);
+    int a=d(g),b=d(g); if(a>b) swap(a,b);
+    shuffle(s.begin()+a,s.begin()+b+1,g);
+}
+void insertionMutation(Chromosome& s, mt19937& g) {
+    if(s.size()<2) return;
+    uniform_int_distribution<> d(0,s.size()-1);
+    int from=d(g),to=d(g); if(from==to) return;
+    Gene elem=s[from]; s.erase(s.begin()+from);
+    int ins=to; if(to>from) ins--;
+    ins=max(0,min(ins,(int)s.size()));
+    s.insert(s.begin()+ins,elem);
+}
+void displacementMutation(Chromosome& s, mt19937& g) {
+    if(s.size()<3) return;
+    uniform_int_distribution<> d(0,s.size()-1);
+    int a=d(g),b=d(g); if(a>b) swap(a,b);
+    if(a==b){ if(b<(int)s.size()-1) b++; else if(a>0) a--; else return; }
+    Chromosome seg(s.begin()+a,s.begin()+b+1);
+    s.erase(s.begin()+a,s.begin()+b+1);
+    vector<int> valid;
+    for(int i=0;i<=(int)s.size();i++) valid.push_back(i);
+    if(valid.empty()) return;
+    uniform_int_distribution<> pd(0,(int)valid.size()-1);
+    int ins=valid[pd(g)];
+    s.insert(s.begin()+ins,seg.begin(),seg.end());
 }
 
-// ============ MUTATION OPERATORS ============
-
-void swapMutation(vector<int>& seq, mt19937& gen) {
-    if (seq.size() < 2) return;
-    
-    uniform_int_distribution<> dist(0, seq.size() - 1);
-    int i = dist(gen);
-    int j = dist(gen);
-    swap(seq[i], seq[j]);
+// ---- Drone Resupply Mutation (NEW) ----
+void droneResupplyMutation(Chromosome& seq, const PDPData& data, mt19937& gen) {
+    // Collect indices with non-empty resupply_vector
+    vector<int> sources;
+    for(int i=0;i<(int)seq.size();i++)
+        if(seq[i].node_id>0 && !seq[i].resupply_vector.empty())
+            sources.push_back(i);
+    if(sources.empty()) return;
+    uniform_int_distribution<> sd(0,(int)sources.size()-1);
+    int srcIdx=sources[sd(gen)];
+    auto& rv=seq[srcIdx].resupply_vector;
+    // Pop random package
+    uniform_int_distribution<> pd(0,(int)rv.size()-1);
+    int pick=pd(gen);
+    int pkg=rv[pick];
+    rv.erase(rv.begin()+pick);
+    // Find the delivery node for this package (pkg itself is the customer node)
+    // Insert into resupply_vector of a random Gene B (node_id>0) before pkg's position
+    int pkg_pos=-1;
+    for(int i=0;i<(int)seq.size();i++) if(seq[i].node_id==pkg){pkg_pos=i;break;}
+    // Candidates: node_id>0, index < pkg_pos (or any if pkg not found)
+    vector<int> cands;
+    for(int i=0;i<(int)seq.size();i++)
+        if(seq[i].node_id>0 && i!=srcIdx && (pkg_pos<0||i<pkg_pos))
+            cands.push_back(i);
+    if(cands.empty()){ rv.insert(rv.begin()+pick,pkg); return; } // rollback
+    uniform_int_distribution<> cd(0,(int)cands.size()-1);
+    seq[cands[cd(gen)]].resupply_vector.push_back(pkg);
 }
 
-void inversionMutation(vector<int>& seq, mt19937& gen) {
-    if (seq.size() < 2) return;
-    
-    uniform_int_distribution<> dist(0, seq.size() - 1);
-    int i = dist(gen);
-    int j = dist(gen);
-    if (i > j) swap(i, j);
-    
-    reverse(seq.begin() + i, seq.begin() + j + 1);
-}
-
-void scrambleMutation(vector<int>& seq, mt19937& gen) {
-    if (seq.size() < 2) return;
-    
-    uniform_int_distribution<> dist(0, seq.size() - 1);
-    int i = dist(gen);
-    int j = dist(gen);
-    if (i > j) swap(i, j);
-    
-    shuffle(seq.begin() + i, seq.begin() + j + 1, gen);
-}
-
-// Insertion Mutation - Di chuyß╗ân mß╗Öt phß║ºn tß╗¡ ─æß║┐n vß╗ï tr├¡ kh├íc
-void insertionMutation(vector<int>& seq, mt19937& gen) {
-    if (seq.size() < 2) return;
-    
-    uniform_int_distribution<> dist(0, seq.size() - 1);
-    int fromPos = dist(gen);
-    int toPos = dist(gen);
-    
-    if (fromPos == toPos) return;
-    
-    int element = seq[fromPos];
-    if (fromPos < toPos) {
-        for (int i = fromPos; i < toPos; ++i) {
-            seq[i] = seq[i + 1];
-        }
-    } else {
-        for (int i = fromPos; i > toPos; --i) {
-            seq[i] = seq[i - 1];
-        }
-    }
-    seq[toPos] = element;
-}
-
-// Displacement Mutation - Di chuyß╗ân mß╗Öt ─æoß║ín con ─æß║┐n vß╗ï tr├¡ kh├íc
-void displacementMutation(vector<int>& seq, mt19937& gen) {
-    if (seq.size() < 3) return;
-    
-    uniform_int_distribution<> dist(0, seq.size() - 1);
-    int start = dist(gen);
-    int end = dist(gen);
-    if (start > end) swap(start, end);
-    
-    // ─Éß║úm bß║úo c├│ ├¡t nhß║Ñt 1 phß║ºn tß╗¡ ─æß╗â di chuyß╗ân
-    if (start == end) {
-        if (end < (int)seq.size() - 1) end++;
-        else if (start > 0) start--;
-        else return;
-    }
-    
-    // Chß╗ìn vß╗ï tr├¡ ─æ├¡ch (kh├┤ng tr├╣ng vß╗¢i ─æoß║ín hiß╗çn tß║íi)
-    vector<int> validPositions;
-    for (int i = 0; i <= (int)seq.size() - (end - start + 1); ++i) {
-        if (i < start || i > end - (end - start)) {
-            validPositions.push_back(i);
-        }
-    }
-    
-    if (validPositions.empty()) return;
-    
-    uniform_int_distribution<> posDist(0, validPositions.size() - 1);
-    int newPos = validPositions[posDist(gen)];
-    
-    // L╞░u ─æoß║ín cß║ºn di chuyß╗ân
-    vector<int> segment(seq.begin() + start, seq.begin() + end + 1);
-    
-    // X├│a ─æoß║ín c┼⌐
-    seq.erase(seq.begin() + start, seq.begin() + end + 1);
-    
-    // T├¡nh newPos sau khi x├│a v├á ─æß║úm bß║úo hß╗úp lß╗ç
-    if (newPos > start) {
-        newPos -= (end - start + 1);
-    }
-    newPos = max(0, min(newPos, (int)seq.size()));
-    
-    // Ch├¿n v├áo vß╗ï tr├¡ mß╗¢i
-    seq.insert(seq.begin() + newPos, segment.begin(), segment.end());
-}
-
-// ============ REPAIR OPERATOR ============
-
-void repairSequence(vector<int>& seq, const PDPData& data, mt19937& gen) {
-    // ─Éß║┐m sß╗æ lß║ºn xuß║Ñt hiß╗çn cß╗ºa mß╗ùi customer
-    map<int, int> count;
-    for (int id : seq) {
-        if (data.isCustomer(id)) {
-            count[id]++;
-        }
-    }
-    
-    // T├¼m customer bß╗ï thiß║┐u
+// ---- Repair Sequence ----
+void repairSequence(Chromosome& seq, const PDPData& data, mt19937& gen) {
+    // --- node_id > 0: exactly once each ---
+    map<int,int> cnt;
+    for(auto& g:seq) if(g.node_id>0&&data.isCustomer(g.node_id)) cnt[g.node_id]++;
     vector<int> missing;
-    for (int i = 0; i < data.numNodes; ++i) {
-        if (data.isCustomer(i) && count[i] == 0) {
-            missing.push_back(i);
+    for(int i=0;i<data.numNodes;i++) if(data.isCustomer(i)&&cnt[i]==0) missing.push_back(i);
+    shuffle(missing.begin(),missing.end(),gen);
+    int mi=0;
+    for(auto& g:seq){
+        if(g.node_id>0&&data.isCustomer(g.node_id)&&cnt[g.node_id]>1&&mi<(int)missing.size()){
+            cnt[g.node_id]--; g.node_id=missing[mi++];
         }
     }
-    
-    // Loß║íi bß╗Å duplicate v├á thay bß║▒ng missing
-    shuffle(missing.begin(), missing.end(), gen);
-    int missingIdx = 0;
-    
-    for (int& id : seq) {
-        if (data.isCustomer(id) && count[id] > 1) {
-            if (missingIdx < (int)missing.size()) {
-                int oldId = id;
-                id = missing[missingIdx++];
-                count[oldId]--;
-                count[id]++;
+    for(;mi<(int)missing.size();mi++) seq.push_back(Gene(missing[mi]));
+
+    // --- node_id == 0: exactly one separator ---
+    vector<int> sepPos;
+    for(int i=0;i<(int)seq.size();i++) if(seq[i].node_id==0) sepPos.push_back(i);
+    if(sepPos.empty()){
+        // Insert separator in middle
+        int mid=max(1,(int)seq.size()/2);
+        seq.insert(seq.begin()+mid,Gene(0));
+    } else if(sepPos.size()>1){
+        // Keep first, remove rest (from back to avoid index shift)
+        for(int k=(int)sepPos.size()-1;k>=1;k--)
+            seq.erase(seq.begin()+sepPos[k]);
+    }
+    // --- node_id == -1: leave untouched ---
+
+    // --- P before DL precedence ---
+    map<int,int> posP,posDL;
+    for(int i=0;i<(int)seq.size();i++){
+        if(seq[i].node_id<=0) continue;
+        int id=seq[i].node_id;
+        if(id>=(int)data.pairIds.size()) continue;
+        int pid=data.pairIds[id];
+        if(pid<=0) continue;
+        if(data.nodeTypes[id]=="P")  posP[pid]=i;
+        if(data.nodeTypes[id]=="DL") posDL[pid]=i;
+    }
+    for(auto& kv:posP){
+        auto it=posDL.find(kv.first);
+        if(it==posDL.end()) continue;
+        if(kv.second>it->second) swap(seq[kv.second].node_id,seq[it->second].node_id);
+    }
+}
+
+// ---- Selection ----
+Chromosome tournamentSelection(const vector<Chromosome>& pop,
+                               const vector<double>& fit,
+                               int k, mt19937& gen) {
+    uniform_int_distribution<> d(0,pop.size()-1);
+    int best=d(gen);
+    for(int i=1;i<k;i++){int idx=d(gen);if(fit[idx]<fit[best])best=idx;}
+    return pop[best];
+}
+
+static bool evalImproved(const Chromosome& child,const Chromosome& p1,const Chromosome& p2){
+    int n=child.size(),d1=0,d2=0;
+    for(int i=0;i<n;i++){
+        if(child[i].node_id!=p1[i].node_id) d1++;
+        if(child[i].node_id!=p2[i].node_id) d2++;
+    }
+    int thr=max(1,n/5);
+    return d1>=thr&&d2>=thr;
+}
+static bool mutImproved(const Chromosome& a,const Chromosome& b){
+    if(a.size()!=b.size()) return true;
+    for(int i=0;i<(int)a.size();i++) if(a[i].node_id!=b[i].node_id) return true;
+    return false;
+}
+
+// ============================================================
+// === MAIN GA ================================================
+// ============================================================
+
+PDPSolution geneticAlgorithmPDP(const PDPData& data, int popSize,
+                                int maxGen, double mutRate, int runNum, bool /*small*/) {
+    mt19937 rng(random_device{}() + (unsigned)runNum*12345u);
+    cout << "\n=== GENETIC ALGORITHM + TABU (Gene-based) ===\n"
+         << "Pop=" << popSize << " Gen=" << maxGen << " MutRate=" << mutRate << "\n";
+
+    AdaptiveParams ap(mutRate);
+    OnlineSurrogate sur;
+    SolutionCache cache;
+
+    // Init population (vector<Chromosome> from initStructuredPopulationPDP)
+    vector<Chromosome> pop = initStructuredPopulationPDP(popSize, data, runNum);
+
+    vector<double> fit(popSize);
+    PDPSolution bestSol; bestSol.totalCost = numeric_limits<double>::infinity();
+    Chromosome   bestSeq;
+
+    for(int i=0;i<popSize;i++){
+        auto s=evalChr(pop[i],data,cache);
+        fit[i]=s.totalCost+s.totalPenalty;
+        if(fit[i]<bestSol.totalCost+bestSol.totalPenalty){ bestSol=s; bestSeq=pop[i]; }
+    }
+    cout << "Init best: " << fixed << setprecision(2) << bestSol.totalCost
+         << " (pen=" << bestSol.totalPenalty << ")\n";
+
+    int noImpCtr=0, noImpEval=0;
+    int tabuThr = data.numCustomers<=20 ? max(100,popSize*5) : max(200,popSize*20);
+    int tabuRounds=0;
+    int adaptInt=max(5,maxGen/20);
+
+    for(int gen=0;gen<maxGen;gen++){
+        // --- Crossover ---
+        vector<Chromosome> offspring;
+        vector<int>        cxTypes;
+        vector<pair<double,double>> parentFit;
+
+        auto chooseCrossover = [&]() -> int {
+            const double eps = 0.05;
+            vector<double> weights(4, eps);
+            for (int i = 0; i < 4; ++i) {
+                if (ap.crossoverUsage[i] > 0) {
+                    double rate = ap.crossoverSuccess[i] / ap.crossoverUsage[i];
+                    weights[i] = rate + eps;
+                }
             }
-        }
-    }
-    
-    // Th├¬m missing c├▓n lß║íi
-    for (int i = missingIdx; i < (int)missing.size(); ++i) {
-        seq.push_back(missing[i]);
-    }
-}
+            discrete_distribution<> pick(weights.begin(), weights.end());
+            return pick(rng);
+        };
 
-// ============ SELECTION ============
-
-vector<int> tournamentSelection(const vector<vector<int>>& population,
-                                const vector<double>& fitness,
-                                int tournamentSize,
-                                mt19937& gen) {
-    uniform_int_distribution<> dist(0, population.size() - 1);
-    
-    int bestIdx = dist(gen);
-    double bestFitness = fitness[bestIdx];
-    
-    for (int i = 1; i < tournamentSize; ++i) {
-        int idx = dist(gen);
-        if (fitness[idx] < bestFitness) {
-            bestIdx = idx;
-            bestFitness = fitness[idx];
-        }
-    }
-    
-    return population[bestIdx];
-}
-
-// ============ ADAPTIVE EVALUATION ============
-
-// Lightweight structural proxy to avoid extra decode calls during operator scoring.
-// Returns true when offspring is sufficiently different from both parents.
-bool evaluateImprovement(const vector<int>& offspring, const vector<int>& parent1, 
-                        const vector<int>& parent2, const PDPData& data) {
-    (void)data;
-    int diff1 = 0;
-    int diff2 = 0;
-    int n = (int)offspring.size();
-    for (int i = 0; i < n; ++i) {
-        if (offspring[i] != parent1[i]) diff1++;
-        if (offspring[i] != parent2[i]) diff2++;
-    }
-    // Mark as promising if child differs by at least 20% from both parents.
-    int minDiff = max(1, n / 5);
-    return (diff1 >= minDiff && diff2 >= minDiff);
-}
-
-// Lightweight proxy: count mutation as useful if sequence actually changed.
-bool evaluateMutationImprovement(const vector<int>& mutated, const vector<int>& original, 
-                               const PDPData& data) {
-    (void)data;
-    return mutated != original;
-}
-
-// ============ MAIN GA ALGORITHM ============
-
-PDPSolution geneticAlgorithmPDP(const PDPData& data, int populationSize, 
-                               int maxGenerations, double mutationRate, int runNumber, bool isSmallScale) {
-    random_device rd;
-    mt19937 rng(rd() + runNumber * 12345);
-    
-    cout << "\n=========================================" << endl;
-    cout << "  GENETIC ALGORITHM + TABU SEARCH (PDP)" << endl;
-    cout << "=========================================" << endl;
-    cout << "Population size: " << populationSize << endl;
-    cout << "Max generations: " << maxGenerations << endl;
-    cout << "Base mutation rate: " << mutationRate << " (adaptive)" << endl;
-    cout << "Tabu threshold: decoded-evaluation based" << endl;
-    cout << "Adaptive operators: ENABLED" << endl;
-    
-    // Initialize adaptive parameters
-    AdaptiveParams adaptiveParams(mutationRate);
-    OnlineSurrogate surrogate;
-    
-    // STEP 0: Initialize Solution Cache
-    // Cache persists across all generations to leverage solution reuse
-    SolutionCache solutionCache;
-    cout << "\n[0] Solution Cache initialized (MAX_SIZE: 150000 entries ≈ 1.5GB RAM)" << endl;
-    
-    // STEP 1: Initialize population
-    cout << "\n[1] Initializing population..." << endl;
-    vector<vector<int>> population = initStructuredPopulationPDP(populationSize, data, runNumber);
-    
-    // Evaluate initial population
-    vector<double> fitness(populationSize);
-    PDPSolution bestSolution;
-    bestSolution.totalCost = numeric_limits<double>::infinity();
-    vector<int> bestSequence;
-    
-    for (int i = 0; i < populationSize; ++i) {
-        PDPSolution sol = evaluateWithCache(population[i], data, solutionCache);
-        fitness[i] = sol.totalCost + sol.totalPenalty;
-        
-        if (fitness[i] < bestSolution.totalCost + bestSolution.totalPenalty) {
-            bestSolution = sol;
-            bestSequence = population[i];
-        }
-    }
-    
-    cout << "Initial best cost: " << fixed << setprecision(2) 
-         << bestSolution.totalCost << " (penalty: " << bestSolution.totalPenalty << ")" << endl;
-    
-    int noImprovementCounter = 0;
-    int noImprovementEvalCounter = 0;
-    int earlyStopThreshold = (int)(0.2 * maxGenerations);  // 20% of generations without improvement
-    int tabuThreshold = data.numCustomers <= 20 ? 
-                        max(100, populationSize * 5) :      // Small instances: trigger early Tabu
-                        max(200, populationSize * 20);      // Large instances: original threshold
-    int tabuRounds = 0;
-    bool tabuApplied = false;
-    int adaptationInterval = max(5, maxGenerations / 20);
-    
-    // STEP 2: GA Loop
-    for (int generation = 0; generation < maxGenerations; ++generation) {
-        // 2.1: Create offspring using adaptive crossover
-        vector<vector<int>> offspring;
-        vector<int> crossoverTypes;
-        vector<pair<vector<int>, vector<int>>> parentPairs;
-        vector<pair<double, double>> parentFitnesses;  // Track parent fitness for threshold
-        
-        int numOffspring = populationSize;
-        for (int i = 0; i < numOffspring; ++i) {
-            vector<int> parent1 = tournamentSelection(population, fitness, 3, rng);
-            vector<int> parent2 = tournamentSelection(population, fitness, 3, rng);
-            parentPairs.push_back({parent1, parent2});
-            
-            // Find fitness of selected parents (search in population)
-            double fit1 = numeric_limits<double>::infinity();
-            double fit2 = numeric_limits<double>::infinity();
-            for (size_t j = 0; j < population.size(); j++) {
-                if (population[j] == parent1) fit1 = fitness[j];
-                if (population[j] == parent2) fit2 = fitness[j];
+        for(int i=0;i<popSize;i++){
+            auto p1=tournamentSelection(pop,fit,3,rng);
+            auto p2=tournamentSelection(pop,fit,3,rng);
+            // Track parent fitness for proxy
+            double f1=fit[0],f2=fit[0];
+            for(int j=0;j<(int)pop.size();j++){
+                bool m1=true,m2=true;
+                for(int k=0;k<(int)pop[j].size()&&(m1||m2);k++){
+                    if(pop[j][k].node_id!=p1[k].node_id) m1=false;
+                    if(pop[j][k].node_id!=p2[k].node_id) m2=false;
+                }
+                if(m1) f1=fit[j];
+                if(m2) f2=fit[j];
             }
-            // Fallback if not found (shouldn't happen)
-            if (fit1 == numeric_limits<double>::infinity()) fit1 = fitness[0];
-            if (fit2 == numeric_limits<double>::infinity()) fit2 = fitness[0];
-            parentFitnesses.push_back({fit1, fit2});
-            
-            int crossoverType = adaptiveParams.selectCrossoverType(rng);
-            crossoverTypes.push_back(crossoverType);
-            
-            vector<int> child;
-            // Use only first 3 crossovers (safer, well-tested)
-            int safeType = crossoverType % 3;
-            if (safeType == 0) {
-                child = orderCrossover(parent1, parent2, rng);
-            } else if (safeType == 1) {
-                child = pmxCrossover(parent1, parent2, rng);
-            } else {
-                child = cycleCrossover(parent1, parent2, rng);
-            }
-            
-            // Repair to ensure all customers present
-            repairSequence(child, data, rng);
+            parentFit.push_back({f1,f2});
+
+            int ct=chooseCrossover(); cxTypes.push_back(ct);
+            Chromosome child;
+            if(ct==0)      child=onePointCrossover(p1,p2,rng);
+            else if(ct==1) child=orderCrossover(p1,p2,rng);
+            else if(ct==2) child=pmxCrossover(p1,p2,rng);
+            else           child=cycleCrossover(p1,p2,rng);
+            repairSequence(child,data,rng);
             offspring.push_back(child);
-            
-            // ─É├ính gi├í hiß╗çu suß║Ñt crossover
-            bool improved = evaluateImprovement(child, parent1, parent2, data);
-            adaptiveParams.updateCrossoverSuccess(crossoverType, improved);
-        }
-        
-        // 2.2: Adaptive Mutation
-        int mutationCount = (int)(offspring.size() * adaptiveParams.currentMutationRate);
-        uniform_int_distribution<> offspringDist(0, offspring.size() - 1);
-        
-        for (int i = 0; i < mutationCount; ++i) {
-            int idx = offspringDist(rng);
-            vector<int> original = offspring[idx];
-            
-            int mutationType = adaptiveParams.selectMutationType(rng);
-            
-            if (mutationType == 0) {
-                swapMutation(offspring[idx], rng);
-            } else if (mutationType == 1) {
-                inversionMutation(offspring[idx], rng);
-            } else if (mutationType == 2) {
-                scrambleMutation(offspring[idx], rng);
-            } else if (mutationType == 3) {
-                insertionMutation(offspring[idx], rng);
-            } else {
-                displacementMutation(offspring[idx], rng);
-            }
-            
-            repairSequence(offspring[idx], data, rng);
-            
-            // ─É├ính gi├í hiß╗çu suß║Ñt mutation
-            bool improved = evaluateMutationImprovement(offspring[idx], original, data);
-            adaptiveParams.updateMutationSuccess(mutationType, improved);
-        }
-        
-        // 2.3: Evaluate offspring with quota-based pre-screening (elite + exploration)
-        // Compute adaptive φ = η_current / η_max (η_max = 100)
-        double phi = min(1.0, (double)noImprovementCounter / 100.0);
-        
-        // Get current best cost and compute threshold
-        double currentBestCost = bestSolution.totalCost + bestSolution.totalPenalty;
-        
-        // Threshold = (1 - φ) * z(χ*) + φ * LB(χ*)
-        // Where z(χ*) = best solution cost, LB(χ*) = lower bound estimate
-        vector<double> offspringFitness(offspring.size(), numeric_limits<double>::infinity());
-        int decodedCount = 0;
-        int skippedCount = 0;
-        vector<double> proxyScore(offspring.size(), currentBestCost);
-        vector<int> proxyOrder(offspring.size(), 0);
-        iota(proxyOrder.begin(), proxyOrder.end(), 0);
-
-        // Build cheap proxy score (lower is better).
-        for (size_t i = 0; i < offspring.size(); ++i) {
-            double lowerBoundEstimate = currentBestCost;
-            if (i < parentFitnesses.size()) {
-                lowerBoundEstimate = min(parentFitnesses[i].first, parentFitnesses[i].second) * 0.98;
-            }
-            // Adaptive threshold still used as a smooth proxy anchor.
-            double threshold = (1.0 - phi) * currentBestCost + phi * lowerBoundEstimate;
-            proxyScore[i] = min(lowerBoundEstimate, threshold);
         }
 
-        sort(proxyOrder.begin(), proxyOrder.end(),
-             [&proxyScore](int a, int b) { return proxyScore[a] < proxyScore[b]; });
-
-        int eliteDecodeCount = max(1, (int)(offspring.size() * 0.50));
-        int exploreDecodeCount = max(1, (int)(offspring.size() * 0.10));
-        vector<char> shouldDecode(offspring.size(), 0);
-
-        for (int k = 0; k < eliteDecodeCount && k < (int)proxyOrder.size(); ++k) {
-            shouldDecode[proxyOrder[k]] = 1;
+        // --- Mutation ---
+        int mutCnt=(int)(offspring.size()*ap.currentMutationRate);
+        uniform_int_distribution<> od(0,offspring.size()-1);
+        for(int i=0;i<mutCnt;i++){
+            int idx=od(rng);
+            Chromosome orig=offspring[idx];
+            int mt=ap.selectMutationType(rng);
+            if(mt==0)      swapMutation(offspring[idx],rng);
+            else if(mt==1) inversionMutation(offspring[idx],rng);
+            else if(mt==2) scrambleMutation(offspring[idx],rng);
+            else if(mt==3) insertionMutation(offspring[idx],rng);
+            else if(mt==4) displacementMutation(offspring[idx],rng);
+            else           droneResupplyMutation(offspring[idx],data,rng);
+            repairSequence(offspring[idx],data,rng);
+            ap.updateMutationSuccess(mt,mutImproved(offspring[idx],orig));
         }
 
-        vector<int> tailIdx;
-        for (int k = eliteDecodeCount; k < (int)proxyOrder.size(); ++k) {
-            tailIdx.push_back(proxyOrder[k]);
-        }
+        // --- Evaluate offspring (full fitness) ---
+        vector<double> offit(offspring.size(), 0.0);
+        int decoded = 0;
+        for (int i = 0; i < (int)offspring.size(); ++i) {
+            auto s = evalChr(offspring[i], data, cache);
+            offit[i] = s.totalCost + s.totalPenalty;
+            decoded++;
 
-        // Diversity-aware exploration: decode candidates that are most novel vs current best.
-        vector<pair<double, int>> noveltyCandidates;
-        noveltyCandidates.reserve(tailIdx.size());
-        for (int idx : tailIdx) {
-            double novelty = edgeNoveltyScore(offspring[idx], bestSequence);
-            noveltyCandidates.push_back({novelty, idx});
+            double parent_best = (i < (int)parentFit.size())
+                ? min(parentFit[i].first, parentFit[i].second)
+                : numeric_limits<double>::infinity();
+            ap.updateCrossoverSuccess(cxTypes[i], offit[i] < parent_best);
         }
-        sort(noveltyCandidates.begin(), noveltyCandidates.end(),
-             [](const pair<double, int>& a, const pair<double, int>& b) {
-                 return a.first > b.first;
-             });
-        for (int k = 0; k < exploreDecodeCount && k < (int)noveltyCandidates.size(); ++k) {
-            shouldDecode[noveltyCandidates[k].second] = 1;
+        if(gen>0&&gen%20==0)
+            cout << "[Gen " << gen << "] best=" << (bestSol.totalCost + bestSol.totalPenalty)
+                 << " decoded=" << decoded << "/" << offspring.size() << "\n";
+
+        // --- Selection: 50% best offspring, 20% random offspring, 30% best parents ---
+        int nBO=(int)(popSize*0.5), nRO=(int)(popSize*0.2), nBP=popSize-nBO-nRO;
+        vector<int> oi(offspring.size()); iota(oi.begin(),oi.end(),0);
+        sort(oi.begin(),oi.end(),[&](int a,int b){return offit[a]<offit[b];});
+        vector<int> pi(pop.size()); iota(pi.begin(),pi.end(),0);
+        sort(pi.begin(),pi.end(),[&](int a,int b){return fit[a]<fit[b];});
+
+        vector<Chromosome> newPop; vector<double> newFit;
+        for(int i=0;i<nBO;i++){newPop.push_back(offspring[oi[i]]);newFit.push_back(offit[oi[i]]);}
+        {   vector<int> rem; for(int i=nBO;i<(int)oi.size();i++) rem.push_back(oi[i]);
+            shuffle(rem.begin(),rem.end(),rng);
+            int ta=min(nRO,(int)rem.size());
+            for(int i=0;i<ta;i++){newPop.push_back(offspring[rem[i]]);newFit.push_back(offit[rem[i]]);}
         }
-        
-        for (size_t i = 0; i < offspring.size(); ++i) {
-            if (shouldDecode[i]) {
-                PDPSolution sol = evaluateWithCache(offspring[i], data, solutionCache);
-                offspringFitness[i] = sol.totalCost + sol.totalPenalty;
-                surrogate.update(proxyScore[i], offspringFitness[i]);
-                decodedCount++;
-            } else {
-                // Surrogate-assisted estimate for non-decoded offspring.
-                double predicted = surrogate.predict(proxyScore[i], proxyScore[i]);
-                double conservative = max(proxyScore[i], predicted);
-                offspringFitness[i] = conservative * 1.02;
-                skippedCount++;
-            }
-        }
-        
-        if (generation > 0 && generation % 20 == 0) {
-            cout << "[THRESHOLD] Gen " << generation << ": φ=" << fixed << setprecision(3) << phi 
-                 << ", Best=" << setprecision(2) << currentBestCost
-                 << ", Decoded=" << decodedCount << "/" << offspring.size() 
-                 << " (" << (int)(decodedCount*100.0/offspring.size()) << "%)"
-                  << ", Skipped=" << skippedCount
-                  << ", SurrogateSamples=" << surrogate.n << endl;
-        }
-        
-        // 2.4: Selection - 50% best offspring + 20% random offspring + 30% best parents
-        int numBestOffspring = (int)(populationSize * 0.5);
-        int numRandomOffspring = (int)(populationSize * 0.2);
-        int numBestParents = populationSize - numBestOffspring - numRandomOffspring;
-        
-        // Sort offspring
-        vector<int> offspringIndices(offspring.size());
-        iota(offspringIndices.begin(), offspringIndices.end(), 0);
-        sort(offspringIndices.begin(), offspringIndices.end(),
-             [&](int a, int b) { return offspringFitness[a] < offspringFitness[b]; });
-        
-        // Sort parents
-        vector<int> parentIndices(population.size());
-        iota(parentIndices.begin(), parentIndices.end(), 0);
-        sort(parentIndices.begin(), parentIndices.end(),
-             [&](int a, int b) { return fitness[a] < fitness[b]; });
-        
-        // Create new population
-        vector<vector<int>> newPopulation;
-        vector<double> newFitness;
-        
-        // 50% best offspring
-        for (int i = 0; i < numBestOffspring; ++i) {
-            newPopulation.push_back(offspring[offspringIndices[i]]);
-            newFitness.push_back(offspringFitness[offspringIndices[i]]);
-        }
-        
-        // 20% random offspring (from remaining, not already selected)
-        {
-            vector<int> remainingOffIdx;
-            for (int i = numBestOffspring; i < (int)offspringIndices.size(); ++i) {
-                remainingOffIdx.push_back(offspringIndices[i]);
-            }
-            shuffle(remainingOffIdx.begin(), remainingOffIdx.end(), rng);
-            int toAdd = min(numRandomOffspring, (int)remainingOffIdx.size());
-            for (int i = 0; i < toAdd; ++i) {
-                newPopulation.push_back(offspring[remainingOffIdx[i]]);
-                newFitness.push_back(offspringFitness[remainingOffIdx[i]]);
-            }
-        }
-        
-        // 30% best parents (elitism)
-        for (int i = 0; i < numBestParents; ++i) {
-            newPopulation.push_back(population[parentIndices[i]]);
-            newFitness.push_back(fitness[parentIndices[i]]);
-        }
-        
-        population = newPopulation;
-        fitness = newFitness;
-        
-        // Update best solution
-        double currentBestCostAfterSelection = bestSolution.totalCost + bestSolution.totalPenalty;
-        if (fitness[0] < currentBestCostAfterSelection) {
-            PDPSolution sol = evaluateWithCache(population[0], data, solutionCache);
-            bestSolution = sol;
-            bestSequence = population[0];
-            noImprovementCounter = 0;
-            noImprovementEvalCounter = 0;
-            adaptiveParams.noImprovementCount = 0;
-            
-            cout << "Gen " << generation << ": New best = " << fixed << setprecision(2)
-                 << bestSolution.totalCost << " (penalty: " << bestSolution.totalPenalty 
-                 << ", mut_rate: " << setprecision(3) << adaptiveParams.currentMutationRate << ")" << endl;
+        for(int i=0;i<nBP;i++){newPop.push_back(pop[pi[i]]);newFit.push_back(fit[pi[i]]);}
+        pop=newPop; fit=newFit;
+
+        // Update best
+        if(fit[0]<bestSol.totalCost+bestSol.totalPenalty){
+            auto s=evalChr(pop[0],data,cache);
+            bestSol=s; bestSeq=pop[0];
+            noImpCtr=0; noImpEval=0; ap.noImprovementCount=0;
+            ap.currentMutationRate = ap.baseMutationRate;
+            cout << "Gen " << gen << ": best=" << fixed << setprecision(2)
+                 << bestSol.totalCost << " (pen=" << bestSol.totalPenalty << ")\n";
         } else {
-            noImprovementCounter++;
-            noImprovementEvalCounter += decodedCount;
-            adaptiveParams.noImprovementCount++;
-        }
-        
-        // 2.6: Adaptive parameter updates
-        if (generation > 0 && generation % adaptationInterval == 0) {
-            adaptiveParams.adaptCrossoverRates();
-            adaptiveParams.adaptMutationRates();
-            adaptiveParams.adaptMutationRate();
-            
-            // In thß╗æng k├¬ adaptive (mß╗ùi 10 generations)
-            if (generation % (adaptationInterval * 2) == 0) {
-                cout << "[ADAPT] Gen " << generation << " - Crossover rates: ";
-                for (int i = 0; i < 4; ++i) {
-                    cout << fixed << setprecision(2) << adaptiveParams.crossoverRates[i] << " ";
-                }
-                cout << ", Mutation rate: " << setprecision(3) << adaptiveParams.currentMutationRate << endl;
+            noImpCtr++; noImpEval+=decoded; ap.noImprovementCount++;
+            if (ap.noImprovementCount > 50) {
+                ap.currentMutationRate = min(0.8, ap.currentMutationRate * 1.05);
             }
         }
-        
-        // 2.5: Apply Tabu Search to top 5% after stagnation
-        if (noImprovementEvalCounter >= tabuThreshold) {
-            int topK = max(1, populationSize / 10); // top 10%
-            cout << "\n[TABU] No improvement for " << noImprovementEvalCounter
-                 << " decoded evaluations. Applying Tabu Search to top " << topK << " individuals..." << endl;
-            
-            // Sort population indices by fitness (ascending = best first)
-            vector<int> sortedIdx(populationSize);
-            iota(sortedIdx.begin(), sortedIdx.end(), 0);
-            sort(sortedIdx.begin(), sortedIdx.end(), 
-                 [&fitness](int a, int b) { return fitness[a] < fitness[b]; });
-            
-            double bestBeforeTabu = bestSolution.totalCost + bestSolution.totalPenalty;
-            
-            // Also add random individuals (with perturbation) for diversity
-            int numRandom = topK; // same number of random individuals
-            vector<int> randomIdx;
-            {
-                vector<int> nonTopIdx;
-                for (int i = topK; i < populationSize; i++) nonTopIdx.push_back(sortedIdx[i]);
-                shuffle(nonTopIdx.begin(), nonTopIdx.end(), rng);
-                int toTake = min(numRandom, (int)nonTopIdx.size());
-                for (int i = 0; i < toTake; i++) randomIdx.push_back(nonTopIdx[i]);
-            }
-            
-            // Process top individuals + random individuals
-            int totalTabu = topK + (int)randomIdx.size();
-            for (int k = 0; k < totalTabu; ++k) {
-                int idx;
-                bool isRandom = (k >= topK);
-                if (!isRandom) {
-                    idx = sortedIdx[k];
-                } else {
-                    idx = randomIdx[k - topK];
-                }
-                
-                if (population[idx].size() != data.numCustomers) continue;
-                
+
+        // Adaptive rates
+        if(gen>0&&gen%adaptInt==0){
+            ap.adaptCrossoverRates(); ap.adaptMutationRates();
+        }
+
+        // --- Tabu phase ---
+        if(noImpEval>=tabuThr){
+            int topK=max(1,popSize/10);
+            cout << "\n[TABU] " << noImpEval << " evals stagnant. Tabu on top " << topK << "\n";
+            vector<int> si(popSize); iota(si.begin(),si.end(),0);
+            sort(si.begin(),si.end(),[&](int a,int b){return fit[a]<fit[b];});
+            double bestBefore=bestSol.totalCost+bestSol.totalPenalty;
+
+            for(int k=0;k<topK;k++){
+                int idx=si[k];
+                Chromosome start=pop[idx];
+                if(k>0) start=doubleBridgePerturbation(start,rng);
+                repairSequence(start,data,rng);
                 try {
-                    // Apply perturbation before Tabu for diversity
-                    vector<int> startSeq = population[idx];
-                    if (isRandom || k > 0) {
-                        // Alternate between double-bridge and ruin-recreate
-                        if (k % 2 == 0) {
-                            startSeq = doubleBridgePerturbation(startSeq, rng);
-                        } else {
-                            startSeq = ruinRecreatePerturbation(startSeq, rng, 0.3);
-                        }
-                        repairSequence(startSeq, data, rng);
+                    Chromosome tabuRes=tabuSearchPDP(start,data,50,cache);
+                    repairSequence(tabuRes,data,rng);
+                    auto ts=evalChr(tabuRes,data,cache);
+                    double tf=ts.totalCost+ts.totalPenalty;
+                    if(tf<fit[idx]){
+                        pop[idx]=tabuRes; fit[idx]=tf;
+                        cout << "  [TABU] idx=" << idx << " -> " << tf << "\n";
+                        if(tf<bestBefore){ bestSeq=tabuRes; bestSol=ts; bestBefore=tf; }
                     }
-                    
-                    vector<int> tabuResult = tabuSearchPDP(startSeq, data, 50, solutionCache);
-                    if (tabuResult.size() != data.numCustomers) continue;
-                    
-                    // Multi-start Assignment LS: try 3 random starts + 1 greedy, pick best
-                    PDPSolution bestTabuSol = assignmentLSPostProcess(tabuResult, data);
-                    double bestTabuFit = bestTabuSol.totalCost + bestTabuSol.totalPenalty;
-                    
-                    for (int ms = 0; ms < 3; ms++) {
-                        // Create random assignment encoding
-                        AssignmentEncoding randEnc;
-                        int seqLen = (int)tabuResult.size();
-                        randEnc.truck_assign.resize(seqLen);
-                        randEnc.drone_assign.resize(seqLen);
-                        randEnc.break_bit.resize(seqLen);
-                        
-                        uniform_int_distribution<> truckDist(0, data.numTrucks - 1);
-                        uniform_int_distribution<> droneDist(0, data.numDrones);
-                        uniform_int_distribution<> bitDist(0, 1);
-                        
-                        for (int j = 0; j < seqLen; j++) {
-                            randEnc.truck_assign[j] = truckDist(rng);
-                            int c = tabuResult[j];
-                            if (data.isCustomer(c) && data.nodeTypes[c] == "D" && data.readyTimes[c] > 0) {
-                                randEnc.drone_assign[j] = droneDist(rng);
-                            } else {
-                                randEnc.drone_assign[j] = 0;
-                            }
-                            randEnc.break_bit[j] = bitDist(rng);
-                        }
-                        
-                        PDPSolution msSol = runAssignmentLS(tabuResult, randEnc, data, 50);
-                        double msFit = msSol.totalCost + msSol.totalPenalty;
-                        if (msFit < bestTabuFit - 0.01) {
-                            bestTabuSol = msSol;
-                            bestTabuFit = msFit;
-                        }
-                    }
-                    
-                    // Update population if improved
-                    if (bestTabuFit < fitness[idx]) {
-                        population[idx] = tabuResult;
-                        fitness[idx] = bestTabuFit;
-                        
-                        cout << "[TABU] Individual " << k << " (rank " << idx 
-                             << "): " << fixed << setprecision(2) << bestTabuFit << endl;
-                        
-                        // Update global best
-                        if (bestTabuFit < bestBeforeTabu) {
-                            bestSequence = tabuResult;
-                            bestSolution = bestTabuSol;
-                            bestBeforeTabu = bestTabuFit;
-                        }
-                    }
-                } catch (const exception& e) {
-                    cerr << "ERROR in Tabu Search for individual " << k << ": " << e.what() << endl;
+                } catch(const exception& e){ cerr << "Tabu err: " << e.what() << "\n"; }
+            }
+
+            noImpCtr=0; noImpEval=0; tabuRounds++;
+
+            // Diversity restart after 3 stagnant tabu rounds
+            if(tabuRounds>=3&&bestSol.totalCost+bestSol.totalPenalty>=bestBefore-0.01){
+                cout << "[DIVERSITY] Restarting 80% of population\n";
+                iota(si.begin(),si.end(),0);
+                sort(si.begin(),si.end(),[&](int a,int b){return fit[a]<fit[b];});
+                int keep=max(2,popSize/5);
+                auto newInds=initStructuredPopulationPDP(popSize-keep,data,runNum+gen);
+                int ri=0;
+                for(int k=keep;k<popSize;k++){
+                    pop[si[k]]= ri<(int)newInds.size()? newInds[ri++]
+                              : doubleBridgePerturbation(bestSeq,rng);
+                    repairSequence(pop[si[k]],data,rng);
+                    auto s=evalChr(pop[si[k]],data,cache);
+                    fit[si[k]]=s.totalCost+s.totalPenalty;
                 }
-            }
-            
-            cout << "[TABU] Best after Tabu+AssignLS: " << fixed << setprecision(2)
-                 << bestSolution.totalCost << " (penalty: " << bestSolution.totalPenalty << ")" << endl;
-            
-            tabuApplied = true;
-            tabuRounds++;
-            noImprovementCounter = 0;
-            noImprovementEvalCounter = 0;
-            
-            // Diversity restart: if Tabu didn't improve after 3 rounds, regenerate 80%
-            if (tabuRounds >= 3 && bestSolution.totalCost + bestSolution.totalPenalty >= bestBeforeTabu - 0.01) {
-                cout << "[DIVERSITY] Restarting 80% of population (keeping top 20%)..." << endl;
-                
-                // Re-sort after Tabu modifications
-                iota(sortedIdx.begin(), sortedIdx.end(), 0);
-                sort(sortedIdx.begin(), sortedIdx.end(), 
-                     [&fitness](int a, int b) { return fitness[a] < fitness[b]; });
-                
-                // Keep top 20%, regenerate 80%
-                int keepCount = max(2, populationSize / 5);
-                
-                // Half from structured init, half from perturbation of best
-                int regenCount = populationSize - keepCount;
-                int fromInit = regenCount / 2;
-                int fromPerturb = regenCount - fromInit;
-                
-                auto newInds = initStructuredPopulationPDP(fromInit, data, runNumber + generation);
-                
-                int regenIdx = 0;
-                for (int k = keepCount; k < populationSize && regenIdx < regenCount; ++k, ++regenIdx) {
-                    int idx = sortedIdx[k];
-                    if (regenIdx < fromInit && regenIdx < (int)newInds.size()) {
-                        population[idx] = newInds[regenIdx];
-                    } else {
-                        // Perturbation of best sequence
-                        vector<int> perturbed = bestSequence;
-                        if (regenIdx % 2 == 0) {
-                            perturbed = doubleBridgePerturbation(perturbed, rng);
-                        } else {
-                            perturbed = ruinRecreatePerturbation(perturbed, rng, 0.4);
-                        }
-                        repairSequence(perturbed, data, rng);
-                        population[idx] = perturbed;
-                    }
-                    PDPSolution sol = evaluateWithCache(population[idx], data, solutionCache);
-                    fitness[idx] = sol.totalCost + sol.totalPenalty;
-                }
-                tabuRounds = 0;
-                cout << "[DIVERSITY] Done. Continuing GA..." << endl;
+                tabuRounds=0;
             }
         }
     }
-    
-    cout << "\n=========================================" << endl;
-    cout << "  GA + TABU COMPLETED" << endl;
-    cout << "=========================================" << endl;
-    
-    // Final multi-start Assignment LS on the best solution
-    if (!bestSequence.empty()) {
-        cout << "Running final multi-start Assignment LS (5 starts) on best solution..." << endl;
-        PDPSolution finalSol = assignmentLSPostProcess(bestSequence, data);
-        double bestFit = bestSolution.totalCost + bestSolution.totalPenalty;
-        double finalFit = finalSol.totalCost + finalSol.totalPenalty;
-        if (finalFit < bestFit - 0.01) {
-            bestSolution = finalSol;
-            bestFit = finalFit;
-        }
-        
-        // Multi-start: try 5 random assignment starts
-        for (int ms = 0; ms < 5; ms++) {
-            AssignmentEncoding randEnc;
-            int seqLen = (int)bestSequence.size();
-            randEnc.truck_assign.resize(seqLen);
-            randEnc.drone_assign.resize(seqLen);
-            randEnc.break_bit.resize(seqLen);
-            
-            uniform_int_distribution<> truckDist(0, data.numTrucks - 1);
-            uniform_int_distribution<> droneDist(0, data.numDrones);
-            uniform_int_distribution<> bitDist(0, 1);
-            
-            for (int j = 0; j < seqLen; j++) {
-                randEnc.truck_assign[j] = truckDist(rng);
-                int c = bestSequence[j];
-                if (data.isCustomer(c) && data.nodeTypes[c] == "D" && data.readyTimes[c] > 0) {
-                    randEnc.drone_assign[j] = droneDist(rng);
-                } else {
-                    randEnc.drone_assign[j] = 0;
-                }
-                randEnc.break_bit[j] = bitDist(rng);
-            }
-            
-            PDPSolution msSol = runAssignmentLS(bestSequence, randEnc, data, 50);
-            double msFit = msSol.totalCost + msSol.totalPenalty;
-            if (msFit < bestFit - 0.01) {
-                bestSolution = msSol;
-                bestFit = msFit;
-                cout << "Multi-start " << ms << " improved: " << fixed << setprecision(2) << msFit << endl;
-            }
-        }
-    }
-    
-    cout << "Final best cost: " << fixed << setprecision(2)
-         << bestSolution.totalCost << " (penalty: " << bestSolution.totalPenalty << ")" << endl;
-    
-    // In thß╗æng k├¬ adaptive cuß╗æi c├╣ng
-    cout << "\n[ADAPTIVE STATS]" << endl;
-    cout << "Final mutation rate: " << fixed << setprecision(3) << adaptiveParams.currentMutationRate << endl;
-    cout << "Crossover success rates: ";
-    for (int i = 0; i < 4; ++i) {
-        if (adaptiveParams.crossoverUsage[i] > 0) {
-            double rate = adaptiveParams.crossoverSuccess[i] / adaptiveParams.crossoverUsage[i];
-            cout << "[" << i << "]:" << setprecision(2) << rate << " ";
-        }
-    }
-    cout << endl;
-    cout << "Mutation success rates: ";
-    for (int i = 0; i < 5; ++i) {
-        if (adaptiveParams.mutationUsage[i] > 0) {
-            double rate = adaptiveParams.mutationSuccess[i] / adaptiveParams.mutationUsage[i];
-            cout << "[" << i << "]:" << setprecision(2) << rate << " ";
-        }
-    }
-    cout << endl;
-    
-    return bestSolution;
+
+    cout << "\n=== GA DONE ===\n"
+         << "Final best: " << fixed << setprecision(2) << bestSol.totalCost
+         << " (pen=" << bestSol.totalPenalty << ")\n";
+    return bestSol;
 }
+

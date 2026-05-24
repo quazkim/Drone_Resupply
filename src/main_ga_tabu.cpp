@@ -1,137 +1,148 @@
-﻿#include <iostream>
-#include <string>
-#include <sstream>
-#include <iomanip>
+/**
+ * @file main_ga_tabu.cpp
+ * @brief Entry point for the GA + Tabu Search solver.
+ *        Sử dụng kiến trúc mã hóa vector<Gene> (Chromosome).
+ *
+ * Usage: ./main_ga_tabu <instance_file> [--depot 0|1|2]
+ *   --depot 0  = center (default)
+ *   --depot 1  = border
+ *   --depot 2  = outside
+ */
+
 #include <chrono>
-#include "pdp_types.h"
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+#include <string>
+
+#include "pdp_ga.h" // geneticAlgorithmPDP  (returns PDPSolution, uses Chromosome internally)
 #include "pdp_reader.h"
-#include "pdp_utils.h"
-#include "pdp_ga.h"
-#include "pdp_tabu.h"
-#include "pdp_fitness.h"
-#include "pdp_localsearch.h"
-#include "pdp_validation.h"
+#include "pdp_types.h"
+#include "pdp_utils.h"      // printSolution, printChromosome
+#include "pdp_validation.h" // validateSolution, printSolutionSummary
 
 using namespace std;
 
-int main(int argc, char* argv[]) {
-    // Start total timer
-    auto startTotal = chrono::high_resolution_clock::now();
-    
-    // Configuration parameters - modify these values directly
-    const int POPULATION_SIZE = 200;       // Balanced: quality vs speed
-    const int MAX_GENERATIONS = 500;       // Standard iterations
-    const double MUTATION_RATE = 0.15;     // Slightly higher diversity
-    const int RUN_NUMBER = 1;
-    
-    if (argc < 2) {
-        cerr << "Usage: " << argv[0] << " <instance_file> [--depot MODE]" << endl;
-        cerr << "Depot modes:" << endl;
-        cerr << "  0 = center (default)" << endl;
-        cerr << "  1 = border" << endl;
-        cerr << "  2 = outside" << endl;
-        cerr << "Examples:" << endl;
-        cerr << "  " << argv[0] << " Instance/U_10_0.5_Num_1.txt" << endl;
-        cerr << "  " << argv[0] << " Instance/U_30_0.5_Num_1.txt --depot 1" << endl;
-        cerr << "  " << argv[0] << " Instance/U_50_1.0_Num_1.txt --depot 2" << endl;
-        cerr << "\nCurrent parameters (edit in main_ga_tabu.cpp):" << endl;
-        cerr << "  Population Size: " << POPULATION_SIZE << endl;
-        cerr << "  Max Generations: " << MAX_GENERATIONS << endl;
-        cerr << "  Mutation Rate: " << MUTATION_RATE << endl;
-        cerr << "  Run Number: " << RUN_NUMBER << endl;
+int main(int argc, char *argv[]) {
+  auto startTotal = chrono::high_resolution_clock::now();
+
+  // ---- Solver parameters (edit here) ----
+  const int POPULATION_SIZE = 500;
+  const int MAX_GENERATIONS = 500;
+  const double MUTATION_RATE = 0.15;
+  const int RUN_NUMBER = 1;
+
+  // ---- Usage check ----
+  if (argc < 2) {
+    cerr << "Usage: " << argv[0] << " <instance_file> [--depot MODE]\n"
+         << "Depot modes: 0=center (default)  1=border  2=outside\n"
+         << "Examples:\n"
+         << "  " << argv[0] << " Instance/U_10_0.5_Num_1.txt\n"
+         << "  " << argv[0] << " Instance/U_30_0.5_Num_1.txt --depot 1\n"
+         << "  " << argv[0] << " Instance/U_50_1.0_Num_1.txt --depot 2\n"
+         << "\nCurrent parameters:\n"
+         << "  Population: " << POPULATION_SIZE << "\n"
+         << "  Generations: " << MAX_GENERATIONS << "\n"
+         << "  Mutation rate: " << MUTATION_RATE << "\n"
+         << "  Run number: " << RUN_NUMBER << "\n";
+    return 1;
+  }
+
+  const string instanceFile = argv[1];
+  int populationSize = POPULATION_SIZE;
+  int maxGenerations = MAX_GENERATIONS;
+  double mutationRate = MUTATION_RATE;
+  int runNumber = RUN_NUMBER;
+
+  // Parse --depot MODE
+  int depotMode = 0;
+  for (int i = 2; i < argc; ++i) {
+    if (string(argv[i]) == "--depot" && i + 1 < argc) {
+      istringstream ss(argv[++i]);
+      if (!(ss >> depotMode) || depotMode < 0 || depotMode > 2) {
+        cerr << "Error: --depot MODE must be 0, 1, or 2\n";
         return 1;
+      }
     }
-    string instanceFile = argv[1];
-    int populationSize = POPULATION_SIZE;
-    int maxGenerations = MAX_GENERATIONS;
-    double mutationRate = MUTATION_RATE;
-    int runNumber = RUN_NUMBER;
-    
-    // Parse optional --depot MODE argument (0=center, 1=border, 2=outside)
-    int depotMode = 0;  // default: center
-    for (int i = 2; i < argc; i++) {
-        string arg = argv[i];
-        if (arg == "--depot" && i + 1 < argc) {
-            istringstream modeStream(argv[i + 1]);
-            if (modeStream >> depotMode && depotMode >= 0 && depotMode <= 2) {
-                // valid mode
-            } else {
-                cerr << "Error: --depot MODE must be 0 (center), 1 (border), or 2 (outside)" << endl;
-                return 1;
-            }
-            i++;
-        }
-    }
+  }
 
-    cout << "\n+========================================================+" << endl;
-    cout << "|     PDP SOLVER - GA + TABU SEARCH                  |" << endl;
-    cout << "+========================================================+" << endl;
+  const string depotNames[] = {"center", "border", "outside"};
 
-    // Read instance
-    cout << "\nReading instance: " << instanceFile << endl;
-    PDPData data;
-    data.depotMode = depotMode;
-    string depotName[] = {"center", "border", "outside"};
-    cout << "Using depot: " << depotName[depotMode] << endl;
-    
-    if (!readPDPFile(instanceFile, data)) {
-        cerr << "Error: Failed to read instance file!" << endl;
-        return 1;
-    }
-    
-    cout << "\nInstance details:" << endl;
-    cout << "  Customers: " << data.numCustomers << endl;
-    cout << "  Trucks: " << data.numTrucks << endl;
-    cout << "  Drones: " << data.numDrones << endl;
-    cout << "  Drone endurance: " << data.droneEndurance << " minutes" << endl;
-    cout << "  Depot: (" << data.coordinates[data.depotIndex].first 
-         << ", " << data.coordinates[data.depotIndex].second << ")" << endl;
-    
-    // Detect scale - adaptive parameters based on problem size
-    const int TOTAL_NODES = data.numCustomers + 1;  // +1 for depot
-    bool isSmallScale = (TOTAL_NODES <= 20);  // FIX: Should include up to 20 nodes (19 customers)
-    if (isSmallScale) {
-        populationSize = 40;
-        maxGenerations = 30;
-        cout << "\n[SCALE DETECTION] Small scale mode (nodes <= 20, customers <= 19)" << endl;
-    } else {
-        cout << "\n[SCALE DETECTION] Large scale mode (nodes > 20)" << endl;
-    }
-    
-    // Run GA + Tabu
-    PDPSolution solution = geneticAlgorithmPDP(data, populationSize, maxGenerations, mutationRate, runNumber, isSmallScale);
-    
-    double costBeforeLS = solution.totalCost;
-    
-    // Recalculate actual C_max using LocalSearch helper
-    IntegratedLocalSearch ils(data, 50);
-    
-    cout << "\n+========================================================+" << endl;
-    cout << "|               GA + TABU RESULT                       |" << endl;
-    cout << "+========================================================+" << endl;
-    cout << "Final cost: " << fixed << setprecision(2) << costBeforeLS << " min" << endl;
-    
-    double costAfterLS = solution.totalCost;
-    
-    // Print final solution
-    cout << "\n+========================================================+" << endl;
-    cout << "|               FINAL SOLUTION                       |" << endl;
-    cout << "+========================================================+" << endl;
-    printSolution(solution, data);
-    
-    // ========== VALIDATION ==========
-    validateSolution(solution, data, true);
-    
-    // ========== COST SUMMARY ==========
-    cout << "\n=========================================\n";
-    cout << "Cost before Local Search: " << fixed << setprecision(2) << costBeforeLS << " minutes\n";
-    cout << "=========================================\n";
-    
-    // End total timer and print
-    auto endTotal = chrono::high_resolution_clock::now();
-    double totalTimeSec = chrono::duration<double>(endTotal - startTotal).count();
-    
-    cout << "\n[TOTAL RUNTIME] " << fixed << setprecision(2) << totalTimeSec << " seconds\n" << endl;
+  cout << "\n+========================================================+\n"
+       << "|     PDP SOLVER - GA + TABU SEARCH (Gene-based)        |\n"
+       << "+========================================================+\n"
+       << "Instance : " << instanceFile << "\n"
+       << "Depot    : " << depotNames[depotMode] << " (mode " << depotMode
+       << ")\n";
 
-    return 0;
+  // ---- Load instance ----
+  PDPData data;
+  data.depotMode = depotMode;
+  if (!readPDPFile(instanceFile, data)) {
+    cerr << "Error: Failed to read instance file!\n";
+    return 1;
+  }
+  showPDPInfo(data);
+
+  cout << "Instance details:\n"
+       << "  Customers : " << data.numCustomers << "\n"
+       << "  Trucks    : " << data.numTrucks << "\n"
+       << "  Drones    : " << data.numDrones << "\n"
+       << "  Endurance : " << data.droneEndurance << " min\n"
+       << "  Depot pos : (" << data.coordinates[data.depotIndex].first << ", "
+       << data.coordinates[data.depotIndex].second << ")\n";
+
+  // ---- Scale detection ----
+  bool isSmallScale = (data.numCustomers + 1 <= 20);
+  if (isSmallScale) {
+    populationSize = 400;
+    maxGenerations = 300;
+    cout << "\n[SCALE] Small scale (customers <= 19): "
+         << "pop=" << populationSize << " gen=" << maxGenerations << "\n";
+  } else {
+    cout << "\n[SCALE] Large scale (customers > 19): "
+         << "pop=" << populationSize << " gen=" << maxGenerations << "\n";
+  }
+
+  // ---- Run GA + Tabu ----
+  // geneticAlgorithmPDP manages Chromosome (vector<Gene>) internally.
+  // It returns a PDPSolution whose original_sequence is a Chromosome.
+  PDPSolution solution =
+      geneticAlgorithmPDP(data, populationSize, maxGenerations, mutationRate,
+                          runNumber, isSmallScale);
+
+  double costGA = solution.totalCost;
+
+  // ---- Print result ----
+  cout << "\n+========================================================+\n"
+       << "|               GA + TABU RESULT                        |\n"
+       << "+========================================================+\n"
+       << "C_max (GA+Tabu) : " << fixed << setprecision(2) << costGA << " min\n"
+       << "Penalty         : " << solution.totalPenalty << "\n"
+       << "Feasible        : " << (solution.isFeasible ? "YES" : "NO") << "\n";
+
+  // ---- Print chromosome encoding (Gene-based, no raw vector<int> loop) ----
+  cout << "\n CHROMOSOME (solution.original_sequence):\n";
+  printChromosome(solution.original_sequence);
+
+  // ---- Full solution detail ----
+  cout << "\n+========================================================+\n"
+       << "|               FINAL SOLUTION                          |\n"
+       << "+========================================================+\n";
+  printSolution(solution, data);
+
+  // ---- Validation ----
+  validateSolution(solution, data, /*verbose=*/true);
+
+  // ---- Summary ----
+  printSolutionSummary(solution, costGA, solution.totalCost);
+
+  // ---- Total runtime ----
+  double totalSec = chrono::duration<double>(
+                        chrono::high_resolution_clock::now() - startTotal)
+                        .count();
+  cout << "\n[TOTAL RUNTIME] " << fixed << setprecision(2) << totalSec
+       << " seconds\n";
+
+  return 0;
 }

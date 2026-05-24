@@ -1,11 +1,65 @@
-﻿#ifndef PDP_TYPES_H
+#ifndef PDP_TYPES_H
 #define PDP_TYPES_H
 
 #include <vector>
 #include <string>
 #include <utility>
+#include <stdexcept>
 
 using namespace std;
+
+// ============================================================
+// === CẤU TRÚC MÃ HÓA LỘ TRÌNH MỚI (New Encoding) ===
+// ============================================================
+
+/**
+ * @brief Một phần tử trong chuỗi mã hóa lộ trình (seq).
+ *
+ * Quy ước node_id:
+ *   node_id > 0  : Điểm khách hàng bình thường
+ *   node_id == 0 : Vách ngăn chia xe (Separator) — đứng trước thuộc Truck 1, sau thuộc Truck 2
+ *   node_id == -1: Lệnh quay về Depot — xe tải tính thời gian về depot, dỡ C2, nhận C1 mới
+ *
+ * resupply_vector:
+ *   Danh sách ID các gói hàng (customer IDs loại D) mà drone sẽ mang tới
+ *   tiếp tế cho xe tải ngay tại node_id này. Rỗng nếu không có drone.
+ *   Điểm nào xuất hiện trước trong seq → drone bay trước.
+ */
+struct SeqStop {
+    int node_id;                  // ID điểm dừng (0 = separator, -1 = depot return, >0 = customer)
+    vector<int> resupply_vector;  // IDs các gói hàng drone mang đến điểm này
+
+    // Constructors
+    SeqStop() : node_id(0) {}                                           // default (node_id=0)
+    explicit SeqStop(int nid) : node_id(nid) {}
+    SeqStop(int nid, vector<int> rv) : node_id(nid), resupply_vector(std::move(rv)) {}
+};
+
+/**
+ * @brief Exception thrown khi vi phạm ràng buộc tải trọng nghiêm trọng.
+ * Được ném ra trong decode_sequence() khi current_load > M_T.
+ */
+struct InfeasibleException : public std::runtime_error {
+    explicit InfeasibleException(const std::string& msg)
+        : std::runtime_error("[INFEASIBLE] " + msg) {}
+};
+
+/**
+ * @brief Type alias cho SeqStop dùng trong ngữ cảnh chromosome của GA.
+ *
+ * Hai tên phân biệt ngữ cảnh sử dụng:
+ *   - SeqStop    : API giải mã lộ trình  (decode_sequence, print_decoded_routes)
+ *   - Gene       : API quần thể GA       (pdp_init, pdp_ga, crossover, mutation)
+ *
+ * Quy ước gene đặc biệt (node_id):
+ *   node_id  > 0  →  điểm khách hàng bình thường
+ *   node_id == 0  →  vách ngăn chia Truck 1 / Truck 2
+ *   node_id == -1 →  lệnh quay về Depot
+ */
+using Gene = SeqStop;
+
+/// Chromosome: một cá thể trong quần thể GA
+using Chromosome = std::vector<Gene>;
 
 /**
  * @brief Core data structure encapsulating the Pickup-Delivery Problem (PDP) instance.
@@ -65,25 +119,36 @@ struct PDPData {
     }
     
     /**
-     * @brief Check if a node ID represents a truck separator in chromosome encoding.
-     * @param id Node identifier
-     * @return true if id is a separator node for some truck
+     * @brief Check if a Gene node_id represents the truck separator.
+     * Quy ước mã hóa mới: Gene(0) = vách ngăn chia Truck 1 / Truck 2.
+     * @param id node_id của Gene
+     * @return true nếu id == 0
      */
     bool isSeparator(int id) const {
-        int s = getSeparatorStart();
-        return (id >= s && id < s + numTrucks);
+        return (id == 0);
+    }
+
+    /**
+     * @brief Check if a Gene node_id represents a virtual depot-return command.
+     * Quy ước mã hóa mới: Gene(-1) = lệnh xe quay về depot ảo giữa hành trình.
+     * @param id node_id của Gene
+     * @return true nếu id == -1
+     */
+    bool isDepotReturn(int id) const {
+        return (id == -1);
     }
     
     /**
-     * @brief Verify if a node ID corresponds to a valid customer node.
-     * Excludes depot and invalid indices. Returns true for P, DL, and D nodes.
+     * @brief Verify if a node ID corresponds to a valid customer node (0-based).
+     * Trả về false nếu id <= 0 (depot vật lý, separator, depot-return)
+     * hoặc id >= numNodes (ngoài vùng hợp lệ).
+     * Trả về true cho các node khách hàng: P, DL, D (C1-resupply có readyTime > 0).
      * @param id 0-based node index
-     * @return true if the node is a customer (not depot, within bounds, valid type)
+     * @return true if and only if id > 0, id < numNodes, and node type is customer
      */
     bool isCustomer(int id) const {
-        if (id < 0 || id >= numNodes) return false; 
-        if (id == depotIndex) return false; 
-        string t = nodeTypes[id]; 
+        if (id <= 0 || id >= numNodes) return false;  // loại 0 (depot), -1 (depot-return), ngoài vùng
+        const string& t = nodeTypes[id];
         return (t == "P" || t == "DL" || (t == "D" && readyTimes[id] > 0));
     }
     
@@ -146,8 +211,13 @@ struct PDPSolution {
     vector<ResupplyEvent> resupply_events;
     vector<double> drone_completion_times; // Completion time for each drone
     
-    // Original sequence (for local search to re-decode)
-    vector<int> original_sequence;
+    // Original chromosome (for local search to re-decode and for debug printing)
+    Chromosome original_sequence;  // vector<Gene> — encoding tạo ra lời giải này
+
+    // Thứ tự bay của drone (danh sách resupply events theo đúng thứ tự thực hiện)
+    // Được điền bởi decode_sequence(), mỗi phần tử = {drone_id, customer_ids, resupply_node}
+    // (Khác với resupply_events vốn không đảm bảo thứ tự)
+    vector<int> drone_order;  // Danh sách resupply_event indices theo thứ tự bay thực tế
 };
 
 #endif

@@ -5,34 +5,53 @@
 #include <vector>
 #include <random>
 
-// ============ GA OPERATORS ============
+// ============================================================
+// === GA OPERATOR SIGNATURES (Chromosome = vector<Gene>) =====
+// ============================================================
 
-// Crossover operators
-std::vector<int> orderCrossover(const std::vector<int>& parent1, const std::vector<int>& parent2, std::mt19937& gen);
-std::vector<int> pmxCrossover(const std::vector<int>& parent1, const std::vector<int>& parent2, std::mt19937& gen);
-std::vector<int> cycleCrossover(const std::vector<int>& parent1, const std::vector<int>& parent2, std::mt19937& gen);
+// ---------- Crossover operators ----------
+// Mỗi hàm trả về Chromosome (vector<Gene>)
+Chromosome onePointCrossover(const Chromosome& parent1, const Chromosome& parent2, std::mt19937& gen);
+Chromosome orderCrossover(const Chromosome& parent1, const Chromosome& parent2, std::mt19937& gen);
+Chromosome pmxCrossover  (const Chromosome& parent1, const Chromosome& parent2, std::mt19937& gen);
+Chromosome cycleCrossover(const Chromosome& parent1, const Chromosome& parent2, std::mt19937& gen);
 
-// Mutation operators
-void swapMutation(std::vector<int>& seq, std::mt19937& gen);
-void inversionMutation(std::vector<int>& seq, std::mt19937& gen);
-void scrambleMutation(std::vector<int>& seq, std::mt19937& gen);
+// ---------- Perturbation operators ----------
+Chromosome doubleBridgePerturbation(const Chromosome& seq, std::mt19937& gen);
+Chromosome ruinRecreatePerturbation(const Chromosome& seq, std::mt19937& gen, double ruinRatio = 0.3);
 
-// Selection
-std::vector<int> tournamentSelection(const std::vector<std::vector<int>>& population,
-                                     const std::vector<double>& fitness,
-                                     int tournamentSize,
-                                     std::mt19937& gen);
+// ---------- Mutation operators ----------
+// Swap, Inversion, Scramble, Insertion, Displacement thao tác trên toàn bộ Gene
+// (được phép di chuyển cả node 0 và -1 để GA tự do điều chỉnh ranh giới xe/depot)
+void swapMutation       (Chromosome& seq, std::mt19937& gen);
+void inversionMutation  (Chromosome& seq, std::mt19937& gen);
+void scrambleMutation   (Chromosome& seq, std::mt19937& gen);
+void insertionMutation  (Chromosome& seq, std::mt19937& gen);
+void displacementMutation(Chromosome& seq, std::mt19937& gen);
 
-// Repair để đảm bảo tất cả khách hàng có trong sequence
-void repairSequence(std::vector<int>& seq, const PDPData& data, std::mt19937& gen);
+// Đột biến mới: di chuyển ngẫu nhiên một gói hàng giữa các resupply_vector
+void droneResupplyMutation(Chromosome& seq, const PDPData& data, std::mt19937& gen);
 
-// ============ MAIN GA ALGORITHM ============
+// ---------- Selection ----------
+Chromosome tournamentSelection(
+    const std::vector<Chromosome>& population,
+    const std::vector<double>& fitness,
+    int tournamentSize,
+    std::mt19937& gen);
+
+// ---------- Repair ----------
+// Đảm bảo: node_id>0 xuất hiện đúng 1 lần | node_id==0 đúng 1 lần | node_id==-1 không chạm
+void repairSequence(Chromosome& seq, const PDPData& data, std::mt19937& gen);
+
+// ============================================================
+// === MAIN GA ALGORITHM ======================================
+// ============================================================
 
 PDPSolution geneticAlgorithmPDP(const PDPData& data,
-                               int populationSize,
-                               int maxGenerations,
-                               double mutationRate,
-                               int runNumber,
-                               bool isSmallScale = false);
+                                int populationSize,
+                                int maxGenerations,
+                                double mutationRate,
+                                int runNumber,
+                                bool isSmallScale = false);
 
 #endif // PDP_GA_H

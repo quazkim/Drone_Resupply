@@ -1,4 +1,4 @@
-﻿#include "pdp_localsearch.h"
+#include "pdp_localsearch.h"
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
@@ -49,7 +49,6 @@ void IntegratedLocalSearch::updateOperatorWeights() {
     const double max_weight = 5.0;
     
     for (auto& pair : operatorStats) {
-        OperatorType op = pair.first;
         OperatorStats& stats = pair.second;
         if (stats.attempts > 0) {
             double success_rate = stats.getSuccessRate();
@@ -734,7 +733,7 @@ bool IntegratedLocalSearch::droneMergeTrips(PDPSolution& sol) {
             
             // Check if merge is possible (same truck, capacity ok)
             if (trip1.truck_id != trip2.truck_id) continue;
-            if (trip1.customer_ids.size() + trip2.customer_ids.size() > drone_capacity) continue;
+            if ((int)(trip1.customer_ids.size() + trip2.customer_ids.size()) > drone_capacity) continue;
             
             // Create merged trip
             ResupplyEvent merged;
@@ -1159,7 +1158,7 @@ bool IntegratedLocalSearch::optimizeDroneConsolidation(PDPSolution& sol) {
             
             // Check combined capacity
             int combined_orders = event1.customer_ids.size() + event2.customer_ids.size();
-            if (combined_orders > (int)data.droneCapacity) continue;
+            if (combined_orders > data.getDroneCapacity()) continue;
             
             // Create merged event
             ResupplyEvent merged = event1;
@@ -2151,3 +2150,122 @@ PDPSolution IntegratedLocalSearch::runSequenceBasedLS(const PDPSolution& initial
     return best;
 }
 
+// ============================================================================
+// MISSING STUB IMPLEMENTATIONS
+// ============================================================================
+
+bool IntegratedLocalSearch::checkPrecedenceConstraints(const PDPSolution& sol) const {
+    // Kiểm tra P phải đứng trước DL tương ứng trên mỗi tuyến xe
+    for (const auto& truck : sol.truck_details) {
+        map<int, int> pickup_pos;  // pairId -> position
+        for (size_t i = 0; i < truck.route.size(); ++i) {
+            int node = truck.route[i];
+            if (node <= 0 || node >= data.numNodes) continue;
+            int pair_id = data.pairIds[node];
+            if (pair_id <= 0) continue;
+            if (data.nodeTypes[node] == "P") {
+                pickup_pos[pair_id] = (int)i;
+            } else if (data.nodeTypes[node] == "DL") {
+                if (pickup_pos.find(pair_id) == pickup_pos.end()) return false;
+                if (pickup_pos[pair_id] >= (int)i) return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool IntegratedLocalSearch::acceptBySA(double delta) {
+    if (delta < 0) return true;  // Always accept improvements
+    if (sa_temperature < sa_min_temperature) return false;
+    double prob = exp(-delta / sa_temperature);
+    uniform_real_distribution<double> dist(0.0, 1.0);
+    return dist(rng) < prob;
+}
+
+void IntegratedLocalSearch::initSATemperature(double initial_cmax) {
+    // Set initial temperature as a percentage of the objective
+    sa_temperature = initial_cmax * 0.05;
+}
+
+bool IntegratedLocalSearch::greedyInsertCustomer(PDPSolution& sol, int customer) {
+    // Insert customer into the best position in any truck route
+    double best_cmax = calculateCmax(sol);
+    bool inserted = false;
+
+    for (auto& truck : sol.truck_details) {
+        for (size_t j = 1; j < truck.route.size(); ++j) {
+            vector<int> new_route = truck.route;
+            new_route.insert(new_route.begin() + j, customer);
+
+            if (!isTruckRouteFeasible(new_route, truck.truck_id)) continue;
+
+            vector<int> old_route = truck.route;
+            truck.route = new_route;
+            recalculateTruckTimes(sol);
+            recalculateDroneTimes(sol);
+            double new_cmax = calculateCmax(sol);
+
+            if (new_cmax < best_cmax) {
+                best_cmax = new_cmax;
+                inserted = true;
+                return true;
+            } else {
+                truck.route = old_route;
+                recalculateTruckTimes(sol);
+                recalculateDroneTimes(sol);
+            }
+        }
+    }
+    return inserted;
+}
+
+IntegratedLocalSearch::RuinInfo IntegratedLocalSearch::ruinSolution(
+    const PDPSolution& sol, double removal_rate) {
+    RuinInfo info;
+    info.ruined_solution = sol;
+
+    // Collect removable customers (not depot)
+    vector<int> removable;
+    for (const auto& truck : sol.truck_details) {
+        for (size_t i = 1; i < truck.route.size() - 1; ++i) {
+            int node = truck.route[i];
+            if (node != data.depotIndex && data.isCustomer(node))
+                removable.push_back(node);
+        }
+    }
+
+    int to_remove = max(1, (int)(removable.size() * removal_rate));
+    shuffle(removable.begin(), removable.end(), rng);
+    removable.resize(min((int)removable.size(), to_remove));
+
+    set<int> remove_set(removable.begin(), removable.end());
+    info.removed_customers = removable;
+
+    // Remove from routes
+    for (auto& truck : info.ruined_solution.truck_details) {
+        vector<int> new_route;
+        for (int node : truck.route) {
+            if (remove_set.count(node) == 0)
+                new_route.push_back(node);
+        }
+        truck.route = new_route;
+    }
+
+    recalculateTruckTimes(info.ruined_solution);
+    recalculateDroneTimes(info.ruined_solution);
+    return info;
+}
+
+PDPSolution IntegratedLocalSearch::recreateSolution(const RuinInfo& ruin_info) {
+    PDPSolution sol = ruin_info.ruined_solution;
+
+    // Greedy re-insert each removed customer
+    for (int customer : ruin_info.removed_customers) {
+        greedyInsertCustomer(sol, customer);
+    }
+
+    recalculateTruckTimes(sol);
+    recalculateDroneTimes(sol);
+    sol.totalCost = calculateCmax(sol);
+    return sol;
+}
