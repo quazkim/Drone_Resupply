@@ -4,10 +4,11 @@
  *
  * NODE ID CONVENTIONS:
  *   Physical array (0-based): index 0 = depot, 1..N-1 = customers
- *   Chromosome Gene encoding:
- *     node_id  > 0  →  Customer (maps 1:1 to physical array index)
- *     node_id == 0  →  Separator (vach ngan Truck 1 / Truck 2)
- *     node_id == -1 →  Depot Return (lenh quay ve depot ao)
+ *   Truck--Drone Resupply encoding (per MD specs):
+ *     0[P]  -> depot load P
+ *     i     -> serve customer i
+ *     i[P]  -> drone resupply P at customer i (before serving i)
+ *     0     -> return to depot and end route
  */
 
 #include "pdp_reader.h"
@@ -131,12 +132,9 @@ bool readPDPFile(const string& filename, PDPData& data) {
         data.readyTimes.push_back(tempReadyTimes[i]);
         data.pairIds.push_back(tempPairIds[i]);
 
-        // Infer demand from node type (qi = 1 as per problem spec)
-        int demand = 0;
-        if      (tempTypes[i] == "P")                                    demand =  1;
-        else if (tempTypes[i] == "DL")                                   demand = -1;
-        else if (tempTypes[i] == "D" && tempReadyTimes[i] > 0)           demand =  1;
-        data.demands.push_back(demand);
+        // Truck--Drone Resupply: each customer has exactly 1 package.
+        // Use readyTime as release date r_i. Default demand q_i = 1.
+        data.demands.push_back(1);
     }
 
     data.numNodes = (int)data.coordinates.size();
@@ -147,12 +145,9 @@ bool readPDPFile(const string& filename, PDPData& data) {
     buildAllDistanceMatrices(data);
 
     // ================================================================
-    // STEP 4: Count customers (only indices > 0, isCustomer() returns
-    //         false for id <= 0 with the updated rule in pdp_types.h)
+    // STEP 4: Count customers (all indices > 0)
     // ================================================================
-    data.numCustomers = 0;
-    for (int i = 1; i < data.numNodes; ++i)
-        if (data.isCustomer(i)) data.numCustomers++;
+    data.numCustomers = std::max(0, data.numNodes - 1);
 
     cout << "[READER] Loaded " << data.numNodes << " nodes total | "
          << "Depot: index 0 | Customers: " << data.numCustomers << "\n";
@@ -168,57 +163,31 @@ void showPDPInfo(const PDPData& data) {
          << "|              PDP Problem Summary                      |\n"
          << "+-------------------------------------------------------+\n";
 
-    cout << "  Total nodes      : " << data.numNodes      << "\n"
-         << "  Customer nodes   : " << data.numCustomers  << "  (P, DL, D with readyTime>0)\n"
+        cout << "  Total nodes      : " << data.numNodes      << "\n"
+            << "  Customer nodes   : " << data.numCustomers  << "  (all nodes with index > 0)\n"
          << "  Depot array idx  : " << data.depotIndex    << "  (always 0-based)\n"
          << "  Trucks           : " << data.numTrucks
          << "  (capacity=" << data.truckCapacity << ")\n"
          << "  Drones           : " << data.numDrones
-         << "  (capacity=" << data.getDroneCapacity()
+            << "  (capacity=" << data.getDroneCapacity()
          << ", endurance=" << data.droneEndurance << " min)\n"
          << "  Truck speed      : " << data.truckSpeed    << " km/h\n"
          << "  Drone speed      : " << data.droneSpeed    << " km/h\n";
 
-    // Node type breakdown
-    int nDepot=0, nP=0, nDL=0, nD_resupply=0;
-    for (int i = 0; i < data.numNodes; ++i) {
-        if      (data.nodeTypes[i] == "P")  nP++;
-        else if (data.nodeTypes[i] == "DL") nDL++;
-        else if (data.nodeTypes[i] == "D") {
-            if (data.readyTimes[i] > 0) nD_resupply++;
-            else                        nDepot++;
-        }
-    }
-    cout << "\n  Node type breakdown:\n"
-         << "    Depot(s)        : " << nDepot      << "\n"
-         << "    P  (C2 pickup)  : " << nP          << "\n"
-         << "    DL (C2 delivery): " << nDL         << "\n"
-         << "    D  (C1 resupply): " << nD_resupply << "\n";
-
-    // P-DL pairs
-    map<int, pair<int,int>> pairs;  // pairId -> {P_index, DL_index}
-    for (int i = 0; i < (int)data.pairIds.size(); ++i) {
-        if (data.pairIds[i] <= 0) continue;
-        int pid = data.pairIds[i];
-        if      (data.nodeTypes[i] == "P")  pairs[pid].first  = i;
-        else if (data.nodeTypes[i] == "DL") pairs[pid].second = i;
-    }
-    if (!pairs.empty()) {
-        cout << "\n  P-DL pairs (C2): ";
-        for (auto& kv : pairs) {
-            if (kv.second.first > 0 && kv.second.second > 0)
-                cout << "[" << kv.second.first << "(P)->"
-                     << kv.second.second << "(DL)] ";
-        }
-        cout << "\n";
+    // Node type breakdown (kept for dataset introspection)
+    map<string,int> typeCount;
+    for (int i = 0; i < data.numNodes; ++i) typeCount[data.nodeTypes[i]]++;
+    cout << "\n  Node type breakdown (raw instance labels):\n";
+    for (const auto& kv : typeCount) {
+        cout << "    " << setw(6) << kv.first << " : " << kv.second << "\n";
     }
 
-    // ---- Encoding mapping block ----
+        // ---- Encoding mapping block ----
     cout << "\n+-------------------------------------------------------+\n"
          << "|  [ENCODING MAPPING]                                   |\n"
-         << "|  Gene( 0)  ->  Separator   (vach ngan Truck 1/2)     |\n"
-         << "|  Gene(-1)  ->  Depot Return (lenh quay ve depot ao)   |\n"
-         << "|  Gene(>0)  ->  Customer     (index 1.." << setw(3) << (data.numNodes-1)
-         << " in array)     |\n"
+            << "|  0[P]   -> Depot loads packages P                     |\n"
+            << "|  i      -> Truck serves customer i                    |\n"
+            << "|  i[P]   -> Drone resupplies P at customer i (pre-serve)|\n"
+            << "|  0      -> Truck returns depot and ends route         |\n"
          << "+-------------------------------------------------------+\n\n";
 }

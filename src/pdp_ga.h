@@ -2,56 +2,44 @@
 #define PDP_GA_H
 
 #include "pdp_types.h"
+#include <ostream>
 #include <vector>
-#include <random>
+#include <unordered_map>
+#include <unordered_set>
 
-// ============================================================
-// === GA OPERATOR SIGNATURES (Chromosome = vector<Gene>) =====
-// ============================================================
+struct Trip {
+    int h = -1;
+    std::vector<int> pkgs;
+    int origin = 0; // 1=parent1, 2=parent2, 3=both
+};
 
-// ---------- Crossover operators ----------
-// Mỗi hàm trả về Chromosome (vector<Gene>)
-Chromosome onePointCrossover(const Chromosome& parent1, const Chromosome& parent2, std::mt19937& gen);
-Chromosome orderCrossover(const Chromosome& parent1, const Chromosome& parent2, std::mt19937& gen);
-Chromosome pmxCrossover  (const Chromosome& parent1, const Chromosome& parent2, std::mt19937& gen);
-Chromosome cycleCrossover(const Chromosome& parent1, const Chromosome& parent2, std::mt19937& gen);
+struct RouteIndexInfo {
+    int route_id = -1;
+    int pos = -1;
+};
 
-// ---------- Perturbation operators ----------
-Chromosome doubleBridgePerturbation(const Chromosome& seq, std::mt19937& gen);
-Chromosome ruinRecreatePerturbation(const Chromosome& seq, std::mt19937& gen, double ruinRatio = 0.3);
+std::vector<std::vector<int>> extractCustomerRoutes(const SolutionEncoding& sol);
+SolutionEncoding initializeEmptyEncodedRoutes(const std::vector<std::vector<int>>& customerRoutes);
+std::vector<Trip> extractResupplyTrips(const SolutionEncoding& sol, int originFlag);
+std::unordered_map<int, RouteIndexInfo> buildCustomerIndex(const SolutionEncoding& sol);
+std::vector<int> getValidPackageSubset(const Trip& trip,
+                                       const std::unordered_map<int, RouteIndexInfo>& childIndex,
+                                       const std::unordered_set<int>& suppliedAlready);
+void repairSolution(SolutionEncoding& child, const PDPData& data);
+void repairC2Pairs(std::vector<std::vector<int>>& routes, const PDPData& data);
 
-// ---------- Mutation operators ----------
-// Swap, Inversion, Scramble, Insertion, Displacement thao tác trên toàn bộ Gene
-// (được phép di chuyển cả node 0 và -1 để GA tự do điều chỉnh ranh giới xe/depot)
-void swapMutation       (Chromosome& seq, std::mt19937& gen);
-void inversionMutation  (Chromosome& seq, std::mt19937& gen);
-void scrambleMutation   (Chromosome& seq, std::mt19937& gen);
-void insertionMutation  (Chromosome& seq, std::mt19937& gen);
-void displacementMutation(Chromosome& seq, std::mt19937& gen);
-
-// Đột biến mới: di chuyển ngẫu nhiên một gói hàng giữa các resupply_vector
-void droneResupplyMutation(Chromosome& seq, const PDPData& data, std::mt19937& gen);
-
-// ---------- Selection ----------
-Chromosome tournamentSelection(
-    const std::vector<Chromosome>& population,
-    const std::vector<double>& fitness,
-    int tournamentSize,
-    std::mt19937& gen);
-
-// ---------- Repair ----------
-// Đảm bảo: node_id>0 xuất hiện đúng 1 lần | node_id==0 đúng 1 lần | node_id==-1 không chạm
-void repairSequence(Chromosome& seq, const PDPData& data, std::mt19937& gen);
-
-// ============================================================
-// === MAIN GA ALGORITHM ======================================
-// ============================================================
-
+/**
+ * @brief Genetic Algorithm for Truck--Drone Resupply (MD encoding).
+ * Returns the best decoded solution found; the encoded solution is in PDPSolution.encoded_routes.
+ */
 PDPSolution geneticAlgorithmPDP(const PDPData& data,
                                 int populationSize,
                                 int maxGenerations,
                                 double mutationRate,
                                 int runNumber,
-                                bool isSmallScale = false);
+                                bool isSmallScale = false,
+                                std::ostream* logStream = nullptr,
+                                int logEvery = 1);
 
 #endif // PDP_GA_H
+

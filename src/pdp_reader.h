@@ -8,14 +8,14 @@
  * @file pdp_reader.h
  * @brief I/O utilities for parsing PDP instance files.
  *
- * NODE ID CONVENTIONS (gene encoding):
- *   Gene(node_id  > 0)  →  Customer node  (0-based array index: 1 .. numNodes-1)
- *   Gene(node_id == 0)  →  Separator       (vách ngăn chia Truck 1 / Truck 2)
- *   Gene(node_id == -1) →  Depot Return    (lệnh xe quay về depot ảo giữa hành trình)
+ * NODE/INDEX CONVENTIONS:
+ *   Physical array (0-based): index 0 = depot, 1..N-1 = customers
  *
- * PHYSICAL ARRAY LAYOUT (0-based):
- *   Index 0             →  Depot vật lý (depotIndex = 0)
- *   Index 1 .. N-1      →  Customer nodes (P, DL, D)
+ * SOLUTION ENCODING (per MD specs):
+ *   0[P]  -> depot load P
+ *   i     -> serve customer i
+ *   i[P]  -> drone resupply P at customer i (before serving i)
+ *   0     -> return to depot and end route
  */
 
 // ---- Distance helpers ----
@@ -60,8 +60,7 @@ bool readPDPFile(const std::string& filename, PDPData& data);
 
 /**
  * @brief Print a concise summary of the loaded instance to stdout.
- * Includes the encoding mapping block:
- *   [ENCODING MAPPING] Gene(0)->Separator | Gene(-1)->Depot Return | Gene(>0)->Customers
+ * Includes the encoding mapping block for the MD encoding.
  *
  * @param data  Populated PDPData
  */

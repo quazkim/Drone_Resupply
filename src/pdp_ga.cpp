@@ -1,631 +1,1005 @@
 #include "pdp_ga.h"
-#include "pdp_tabu.h"
-#include "pdp_types.h"
+
 #include "pdp_fitness.h"
-#include "pdp_cache.h"
 #include "pdp_init.h"
+#include "pdp_tabu.h"
+
 #include <algorithm>
-#include <random>
-#include <map>
-#include <set>
-#include <cmath>
-#include <iostream>
-#include <limits>
-#include <iomanip>
+#include <climits>
 #include <numeric>
+#include <random>
+#include <unordered_map>
 #include <unordered_set>
+
 using namespace std;
 
-// ---- Bridge: Chromosome → vector<int> for evaluateWithCache ----
-static vector<int> chrToIds(const Chromosome& c) {
-    vector<int> v; v.reserve(c.size());
-    for (auto& g : c) v.push_back(g.node_id);
-    return v;
-}
-static PDPSolution evalChr(const Chromosome& c, const PDPData& d, SolutionCache& cache) {
-    return evaluateWithCache(chrToIds(c), d, cache);
-}
+// namespace { // Expose helpers globally
 
-// ---- AdaptiveParams ----
-struct AdaptiveParams {
-    vector<double> crossoverSuccess, crossoverRates;
-    vector<int>    crossoverUsage;
-    vector<double> mutationSuccess, mutationRates;
-    vector<int>    mutationUsage;
-    double currentMutationRate, baseMutationRate;
-    int noImprovementCount;
-
-    AdaptiveParams(double base) :
-        crossoverSuccess(4,0), crossoverRates(4,0.25), crossoverUsage(4,0),
-        mutationSuccess(6,0),  mutationRates(6,1.0/6), mutationUsage(6,0),
-        currentMutationRate(base), baseMutationRate(base), noImprovementCount(0) {}
-
-    void updateCrossoverSuccess(int t, bool ok){ crossoverUsage[t]++; if(ok) crossoverSuccess[t]++; }
-    void updateMutationSuccess (int t, bool ok){ mutationUsage[t]++;  if(ok) mutationSuccess[t]++;  }
-
-    void adaptCrossoverRates() {
-        double tot=0; for(int i=0;i<4;i++) if(crossoverUsage[i]>0) tot+=crossoverSuccess[i]/crossoverUsage[i];
-        if(tot>0) for(int i=0;i<4;i++) crossoverRates[i]= crossoverUsage[i]>0? 0.1+0.8*(crossoverSuccess[i]/crossoverUsage[i])/tot : 0.25;
-    }
-    void adaptMutationRates() {
-        double tot=0; for(int i=0;i<6;i++) if(mutationUsage[i]>0) tot+=mutationSuccess[i]/mutationUsage[i];
-        if(tot>0) for(int i=0;i<6;i++) mutationRates[i]= mutationUsage[i]>0? 0.05+0.9*(mutationSuccess[i]/mutationUsage[i])/tot : 1.0/6;
-    }
-    void adaptMutationRate() {
-        if(noImprovementCount>5)     currentMutationRate=min(0.5, currentMutationRate*1.2);
-        else if(noImprovementCount<2) currentMutationRate=max(baseMutationRate*0.5, currentMutationRate*0.9);
-    }
-    int selectCrossoverType(mt19937& g){ discrete_distribution<> d(crossoverRates.begin(),crossoverRates.end()); return d(g); }
-    int selectMutationType (mt19937& g){ discrete_distribution<> d(mutationRates.begin(), mutationRates.end());  return d(g); }
-};
-
-struct OnlineSurrogate {
-    int n=0; double sumX=0,sumY=0,sumXX=0,sumXY=0;
-    void update(double x,double y){n++;sumX+=x;sumY+=y;sumXX+=x*x;sumXY+=x*y;}
-    bool ready() const { return n>=30; }
-    double predict(double x, double fb) const {
-        if(n<2) return fb;
-        double d=n*sumXX-sumX*sumX;
-        if(fabs(d)<1e-9) return fb;
-        double a=(n*sumXY-sumX*sumY)/d, b=(sumY-a*sumX)/n, y=a*x+b;
-        return isfinite(y)?y:fb;
-    }
-};
-
-// ---- Edge novelty (Chromosome version, compare node_ids) ----
-static double edgeNoveltyScore(const Chromosome& seq, const Chromosome& ref) {
-    if(seq.size()<2||ref.size()<2||seq.size()!=ref.size()) return 1.0;
-    unordered_set<long long> refE; refE.reserve(ref.size()*2);
-    auto ek=[](int a,int b){ return (static_cast<long long>(a)<<32)^static_cast<unsigned>(b); };
-    for(size_t i=0;i+1<ref.size();i++) refE.insert(ek(ref[i].node_id,ref[i+1].node_id));
-    int overlap=0;
-    for(size_t i=0;i+1<seq.size();i++) if(refE.count(ek(seq[i].node_id,seq[i+1].node_id))) overlap++;
-    return 1.0-(double)overlap/max(1,(int)seq.size()-1);
-}
-
-// ---- Perturbation operators ----
-Chromosome doubleBridgePerturbation(const Chromosome& seq, mt19937& gen) {
-    int n=seq.size(); if(n<8) return seq;
-    uniform_int_distribution<> d(1,n-2);
-    set<int> cs; vector<int> cuts;
-    while((int)cuts.size()<3){ int c=d(gen); if(!cs.count(c)){cuts.push_back(c);cs.insert(c);} }
-    sort(cuts.begin(),cuts.end());
-    Chromosome r;
-    for(int i=0;      i<cuts[0];i++) r.push_back(seq[i]);
-    for(int i=cuts[1];i<cuts[2];i++) r.push_back(seq[i]);
-    for(int i=cuts[0];i<cuts[1];i++) r.push_back(seq[i]);
-    for(int i=cuts[2];i<n;      i++) r.push_back(seq[i]);
-    return r;
-}
-
-Chromosome ruinRecreatePerturbation(const Chromosome& seq, mt19937& gen, double ratio) {
-    int n=seq.size(), k=max(2,(int)(n*ratio));
-    vector<int> idx(n); iota(idx.begin(),idx.end(),0);
-    shuffle(idx.begin(),idx.end(),gen);
-    set<int> rm(idx.begin(),idx.begin()+k);
-    vector<Gene> removed, remaining;
-    for(int i=0;i<n;i++) (rm.count(i)?removed:remaining).push_back(seq[i]);
-    shuffle(removed.begin(),removed.end(),gen);
-    for(auto& g:removed){
-        uniform_int_distribution<> p(0,(int)remaining.size());
-        remaining.insert(remaining.begin()+p(gen),g);
-    }
-    return remaining;
-}
-
-// ---- Crossover helpers ----
-// Split: extract customer genes + record special-node positions from parent1
-static void splitChromosome(const Chromosome& p,
-                             vector<Gene>& custs,
-                             vector<pair<int,Gene>>& specials) {
-    for(int i=0;i<(int)p.size();i++) {
-        if(p[i].node_id>0) custs.push_back(p[i]);
-        else                specials.push_back({i,p[i]});
-    }
-}
-
-// Reassemble: fill child_cust into skeleton, inserting specials at original relative positions
-static Chromosome reassemble(const vector<Gene>& child_cust,
-                              const vector<pair<int,Gene>>& specials,
-                              int parent_len) {
-    // Build a result of size parent_len
-    // specials are at their original indices in parent1
-    Chromosome result(parent_len);
-    // Mark special positions
-    set<int> spos; for(auto& s:specials) spos.insert(s.first);
-    // Fill specials
-    for(auto& s:specials) result[s.first]=s.second;
-    // Fill customer slots in order
-    int ci=0;
-    for(int i=0;i<parent_len;i++) {
-        if(!spos.count(i)) result[i]=child_cust[ci++];
-    }
-    return result;
-}
-
-// ---- One-Point Crossover (free-style, includes 0/-1) ----
-Chromosome onePointCrossover(const Chromosome& p1, const Chromosome& p2, mt19937& gen) {
-    int n = (int)p1.size();
-    if (n == 0 || (int)p2.size() != n) return p1;
-
-    uniform_int_distribution<> d(1, n - 1);
-    int cut = d(gen);
-
-    Chromosome child;
-    child.reserve(n);
-
-    set<int> used_customers;
-    for (int i = 0; i < cut; ++i) {
-        child.push_back(p1[i]);
-        if (p1[i].node_id > 0) used_customers.insert(p1[i].node_id);
-    }
-
-    for (int i = 0; i < n && (int)child.size() < n; ++i) {
-        const Gene& g = p2[i];
-        if (g.node_id > 0) {
-            if (used_customers.count(g.node_id)) continue;
-            used_customers.insert(g.node_id);
+vector<vector<int>> extractCustomerRoutes(const SolutionEncoding& sol) {
+    vector<vector<int>> routes;
+    routes.reserve(sol.size());
+    for (const auto& r : sol) {
+        vector<int> cr;
+        for (const auto& st : r) {
+            if (st.node > 0) cr.push_back(st.node);
         }
-        child.push_back(g);
+        routes.push_back(std::move(cr));
     }
-
-    return child;
+    return routes;
 }
 
-// ---- OX Crossover (free-style, allows 0/-1) ----
-Chromosome orderCrossover(const Chromosome& p1, const Chromosome& p2, mt19937& gen) {
-    int n = (int)p1.size();
-    if (n == 0 || (int)p2.size() != n) return p1;
+vector<int> flatten(const vector<vector<int>>& routes) {
+    vector<int> flat;
+    size_t total = 0;
+    for (const auto& r : routes) total += r.size();
+    flat.reserve(total);
+    for (const auto& r : routes) flat.insert(flat.end(), r.begin(), r.end());
+    return flat;
+}
 
-    uniform_int_distribution<> d(0, n - 1);
-    int a = d(gen), b = d(gen);
-    if (a > b) swap(a, b);
+vector<int> routeLengths(const vector<vector<int>>& routes) {
+    vector<int> lens;
+    lens.reserve(routes.size());
+    for (const auto& r : routes) lens.push_back((int)r.size());
+    return lens;
+}
 
-    Chromosome child(n, Gene(0));
-    for (auto& g : child) g.resupply_vector.clear();
-
-    set<int> used_customers;
-    for (int i = a; i <= b; ++i) {
-        child[i] = p1[i];
-        if (p1[i].node_id > 0) used_customers.insert(p1[i].node_id);
+vector<vector<int>> splitByLengths(const vector<int>& flat, const vector<int>& lengths) {
+    vector<vector<int>> out;
+    out.reserve(lengths.size());
+    size_t off = 0;
+    for (int len : lengths) {
+        vector<int> r;
+        r.reserve((size_t)max(0, len));
+        for (int i = 0; i < len && off < flat.size(); ++i, ++off) r.push_back(flat[off]);
+        out.push_back(std::move(r));
     }
+    return out;
+}
 
-    int ci = (b + 1) % n;
-    int pi = (b + 1) % n;
-    while (ci != a) {
-        const Gene& cand = p2[pi];
-        if (cand.node_id > 0) {
-            if (!used_customers.count(cand.node_id)) {
-                child[ci] = cand;
-                used_customers.insert(cand.node_id);
-                ci = (ci + 1) % n;
+SolutionEncoding initializeEmptyEncodedRoutes(const vector<vector<int>>& customerRoutes) {
+    SolutionEncoding enc;
+    enc.reserve(customerRoutes.size());
+    for (const auto& cr : customerRoutes) {
+        Route r;
+        r.reserve(cr.size() + 2);
+        r.push_back(RouteStop(0));
+        for (int c : cr) r.push_back(RouteStop(c));
+        r.push_back(RouteStop(0));
+        r.back().packages.clear();
+        enc.push_back(std::move(r));
+    }
+    return enc;
+}
+
+// Trip struct is defined in pdp_ga.h
+
+string tripKey(int h, const vector<int>& pkgs) {
+    string key = to_string(h) + ":";
+    for (int p : pkgs) {
+        key += to_string(p);
+        key.push_back(',');
+    }
+    return key;
+}
+
+vector<Trip> extractResupplyTrips(const SolutionEncoding& sol, int originFlag) {
+    vector<Trip> trips;
+    for (const auto& r : sol) {
+        for (const auto& st : r) {
+            if (st.node > 0 && !st.packages.empty()) {
+                Trip t;
+                t.h = st.node;
+                t.pkgs = st.packages;
+                sort(t.pkgs.begin(), t.pkgs.end());
+                t.pkgs.erase(unique(t.pkgs.begin(), t.pkgs.end()), t.pkgs.end());
+                t.origin = originFlag;
+                trips.push_back(std::move(t));
             }
-        } else {
-            child[ci] = cand;
-            ci = (ci + 1) % n;
         }
-        pi = (pi + 1) % n;
     }
+    return trips;
+}
+
+
+// RouteIndexInfo struct is defined in pdp_ga.h
+
+unordered_map<int, RouteIndexInfo> buildCustomerIndex(const SolutionEncoding& sol) {
+    unordered_map<int, RouteIndexInfo> idx;
+    for (int rId = 0; rId < (int)sol.size(); ++rId) {
+        int pos = 0;
+        for (const auto& st : sol[rId]) {
+            if (st.node > 0) {
+                idx[st.node] = RouteIndexInfo{rId, pos};
+                pos++;
+            }
+        }
+    }
+    return idx;
+}
+
+vector<int> getValidPackageSubset(const Trip& trip,
+                                  const unordered_map<int, RouteIndexInfo>& childIndex,
+                                  const unordered_set<int>& suppliedAlready) {
+    auto itH = childIndex.find(trip.h);
+    if (itH == childIndex.end()) return {};
+    const int routeH = itH->second.route_id;
+    const int posH = itH->second.pos;
+
+    vector<int> valid;
+    valid.reserve(trip.pkgs.size());
+
+    for (int p : trip.pkgs) {
+        if (suppliedAlready.count(p)) continue;
+        auto itP = childIndex.find(p);
+        if (itP == childIndex.end()) continue;
+        if (itP->second.route_id != routeH) continue;
+        if (itP->second.pos < posH) continue;
+        valid.push_back(p);
+    }
+
+    return valid;
+}
+
+static double pkgWeight(const PDPData& data, int p) {
+    if (p <= 0 || p >= (int)data.demands.size()) return 0.0;
+    return (double)data.demands[p];
+}
+
+static void repairInvalidResupplyPositions(SolutionEncoding& child) {
+    auto idx = buildCustomerIndex(child);
+    for (auto& r : child) {
+        // Build customer positions within this route
+        vector<int> customers;
+        customers.reserve(r.size());
+        for (const auto& st : r) if (st.node > 0) customers.push_back(st.node);
+        unordered_map<int,int> pos;
+        for (int i = 0; i < (int)customers.size(); ++i) pos[customers[i]] = i;
+
+        for (auto& st : r) {
+            if (st.node <= 0 || st.packages.empty()) continue;
+            const int h = st.node;
+            const int posH = pos[h];
+            vector<int> kept;
+            kept.reserve(st.packages.size());
+            for (int p : st.packages) {
+                auto it = pos.find(p);
+                if (it == pos.end()) continue;
+                if (it->second < posH) continue;
+                kept.push_back(p);
+            }
+            st.packages.swap(kept);
+        }
+    }
+}
+
+static void repairDroneCapacity(SolutionEncoding& child, const PDPData& data) {
+    const double QD = (double)data.getDroneCapacity();
+    for (auto& r : child) {
+        // Precompute pos of each customer in this route
+        vector<int> customers;
+        for (const auto& st : r) if (st.node > 0) customers.push_back(st.node);
+        unordered_map<int,int> pos;
+        for (int i = 0; i < (int)customers.size(); ++i) pos[customers[i]] = i;
+
+        for (auto& st : r) {
+            if (st.node <= 0 || st.packages.empty()) continue;
+
+            // Prioritize packages served earlier after h
+            vector<pair<int,int>> pk;
+            pk.reserve(st.packages.size());
+            for (int p : st.packages) {
+                auto it = pos.find(p);
+                pk.push_back({it == pos.end() ? INT_MAX : it->second, p});
+            }
+            sort(pk.begin(), pk.end());
+
+            vector<int> kept;
+            double load = 0.0;
+            for (auto& it : pk) {
+                const int p = it.second;
+                const double w = pkgWeight(data, p);
+                if (load + w <= QD + 1e-9) {
+                    kept.push_back(p);
+                    load += w;
+                }
+            }
+            st.packages.swap(kept);
+        }
+    }
+}
+
+static void removeEmptyResupplyMarkers(SolutionEncoding& child) {
+    for (auto& r : child) {
+        for (auto& st : r) {
+            if (st.node > 0 && st.packages.empty()) {
+                // keep as plain customer stop
+            }
+        }
+    }
+}
+
+static void dedupPackageSupply(SolutionEncoding& child) {
+    // If a package appears in multiple resupplies, keep the earliest resupply (by route order).
+    unordered_map<int, pair<int,int>> bestResupply; // pkg -> (routeIdx, stopIdx)
+
+    for (int rId = 0; rId < (int)child.size(); ++rId) {
+        for (int sId = 0; sId < (int)child[rId].size(); ++sId) {
+            const auto& st = child[rId][sId];
+            if (st.node <= 0 || st.packages.empty()) continue;
+            for (int p : st.packages) {
+                auto it = bestResupply.find(p);
+                if (it == bestResupply.end() || make_pair(rId, sId) < it->second) {
+                    bestResupply[p] = {rId, sId};
+                }
+            }
+        }
+    }
+
+    // Remove package from non-best resupplies
+    for (int rId = 0; rId < (int)child.size(); ++rId) {
+        for (int sId = 0; sId < (int)child[rId].size(); ++sId) {
+            auto& st = child[rId][sId];
+            if (st.node <= 0 || st.packages.empty()) continue;
+
+            vector<int> kept;
+            kept.reserve(st.packages.size());
+            for (int p : st.packages) {
+                auto it = bestResupply.find(p);
+                if (it != bestResupply.end() && it->second == make_pair(rId, sId)) {
+                    kept.push_back(p);
+                }
+            }
+            st.packages.swap(kept);
+        }
+    }
+
+    // Remove resupplied packages from all depot loads
+    unordered_set<int> resupplied;
+    for (const auto& kv : bestResupply) resupplied.insert(kv.first);
+
+    for (auto& r : child) {
+        for (auto& st : r) {
+            if (st.node != 0 || st.packages.empty()) continue;
+            vector<int> kept;
+            kept.reserve(st.packages.size());
+            for (int p : st.packages) {
+                if (!resupplied.count(p)) kept.push_back(p);
+            }
+            st.packages.swap(kept);
+        }
+    }
+}
+
+static double truckTravelMinutes(const PDPData& data, int a, int b) {
+    if (a < 0 || a >= data.numNodes || b < 0 || b >= data.numNodes) return 1e18;
+    return data.truckDistMatrix[a][b];
+}
+
+static double pkgRelease(const PDPData& data, int p) {
+    if (p <= 0 || p >= (int)data.readyTimes.size()) return 0.0;
+    return (double)data.readyTimes[p];
+}
+
+static void mergeConsecutiveDepotStops(Route& r) {
+    if (r.size() < 2) return;
+    Route out;
+    out.reserve(r.size());
+    for (size_t i = 0; i < r.size(); ++i) {
+        if (r[i].node == 0) {
+            if (i + 1 < r.size() && r[i + 1].node == 0) {
+                r[i + 1].packages.insert(r[i + 1].packages.begin(), r[i].packages.begin(), r[i].packages.end());
+                continue;
+            }
+        }
+        out.push_back(r[i]);
+    }
+    r.swap(out);
+}
+
+static void removeEmptyIntermediateDepotStops(Route& r) {
+    if (r.size() <= 2) return;
+    // Keep first and last depot stop.
+    Route out;
+    out.reserve(r.size());
+    for (size_t i = 0; i < r.size(); ++i) {
+        const auto& st = r[i];
+        const bool isFirst = (i == 0);
+        const bool isLast = (i + 1 == r.size());
+        if (st.node == 0 && st.packages.empty() && !isFirst && !isLast) {
+            continue;
+        }
+        out.push_back(st);
+    }
+    r.swap(out);
+}
+
+static void rebuildDepotLoadsForRoute(Route& r, const PDPData& data) {
+    // Preserve any pre-specified depot packages as REQUIRED loads for that depot stop
+    // (used for inserted depot-return stops like 0[{i}] when the truck lacks package i).
+    vector<vector<int>> requiredAtDepot(r.size());
+    for (size_t i = 0; i < r.size(); ++i) {
+        if (r[i].node == 0 && !r[i].packages.empty()) {
+            requiredAtDepot[i] = r[i].packages;
+        }
+    }
+
+    // Clear all depot packages; will rebuild (required packages will be re-applied).
+    for (auto& st : r) {
+        if (st.node == 0) st.packages.clear();
+    }
+    // Ensure structural depot boundary
+    if (r.empty() || r.front().node != 0) r.insert(r.begin(), RouteStop(0));
+    if (r.back().node != 0) r.push_back(RouteStop(0));
+    r.back().packages.clear();
+
+    // Precompute for this route: which package is resupplied at which stop index.
+    unordered_map<int,int> resupplyStopIdx;
+    for (int i = 0; i < (int)r.size(); ++i) {
+        if (r[i].node <= 0) continue;
+        for (int p : r[i].packages) {
+            if (!resupplyStopIdx.count(p)) resupplyStopIdx[p] = i;
+            else resupplyStopIdx[p] = min(resupplyStopIdx[p], i);
+        }
+    }
+
+    unordered_set<int> onboard;
+    double onboardLoad = 0.0;
+
+    double t = 0.0;
+    int pos = data.depotIndex;
+
+    auto greedyLoadAtDepotIdx = [&](int depotIdx) {
+        vector<int> P;
+        double remaining = (double)data.truckCapacity - onboardLoad;
+
+        // Wait until required packages for this depot stop are released, then load them first.
+        double requiredReleaseTime = t;
+        if (depotIdx >= 0 && depotIdx < (int)requiredAtDepot.size()) {
+            for (int req : requiredAtDepot[(size_t)depotIdx]) {
+                requiredReleaseTime = max(requiredReleaseTime, pkgRelease(data, req));
+            }
+        }
+        if (requiredReleaseTime > t + 1e-9) {
+            t = requiredReleaseTime;
+        }
+
+        if (depotIdx >= 0 && depotIdx < (int)requiredAtDepot.size()) {
+            for (int req : requiredAtDepot[(size_t)depotIdx]) {
+                if (req <= 0) continue;
+                if (onboard.count(req)) continue;
+                const double w = pkgWeight(data, req);
+                if (w <= remaining + 1e-9) {
+                    P.push_back(req);
+                    remaining -= w;
+                    onboard.insert(req);
+                    onboardLoad += w;
+                }
+            }
+        }
+
+        for (int j = depotIdx + 1; j < (int)r.size(); ++j) {
+            const int node = r[j].node;
+            if (node <= 0) continue;
+            const int pkg = node;
+            if (onboard.count(pkg)) continue;
+
+            if (pkg > 0 && pkg < (int)data.nodeTypes.size()) {
+                if (data.nodeTypes[pkg] == "P" || data.nodeTypes[pkg] == "DL") {
+                    continue;
+                }
+            }
+
+            // If package will be received by drone before service, skip depot loading.
+            auto itRS = resupplyStopIdx.find(pkg);
+            if (itRS != resupplyStopIdx.end() && itRS->second <= j) {
+                continue;
+            }
+
+            if (pkgRelease(data, pkg) > t + 1e-9) continue;
+
+            const double w = pkgWeight(data, pkg);
+            if (w <= remaining + 1e-9) {
+                P.push_back(pkg);
+                remaining -= w;
+                onboard.insert(pkg);
+                onboardLoad += w;
+            }
+        }
+
+        r[depotIdx].packages = std::move(P);
+        if (!r[depotIdx].packages.empty()) {
+            t += data.depotReceiveTime;
+        }
+    };
+
+    for (int idx = 0; idx < (int)r.size(); ++idx) {
+        auto& st = r[idx];
+
+        if (st.node == 0) {
+            if (pos != data.depotIndex) {
+                t += truckTravelMinutes(data, pos, data.depotIndex);
+                pos = data.depotIndex;
+            }
+            greedyLoadAtDepotIdx(idx);
+            continue;
+        }
+
+        const int i = st.node;
+
+        // Travel to customer
+        t += truckTravelMinutes(data, pos, i);
+        pos = i;
+
+        // Receive drone resupply at i[P] before serving i
+        for (int p : st.packages) {
+            if (!onboard.count(p)) {
+                onboard.insert(p);
+                onboardLoad += pkgWeight(data, p);
+            }
+        }
+
+        // Ensure package i is available; else insert depot return 0[i] right before this customer.
+        if (i > 0 && i < (int)data.nodeTypes.size()) {
+            string type = data.nodeTypes[i];
+            if (type == "D" && !onboard.count(i)) {
+                RouteStop depot(0, vector<int>{i});
+                r.insert(r.begin() + idx, depot);
+
+                // Restart rebuilding after structural change
+                rebuildDepotLoadsForRoute(r, data);
+                return;
+            }
+        }
+
+        // Serve i
+        if (i > 0 && i < (int)data.nodeTypes.size()) {
+            string type = data.nodeTypes[i];
+            if (type == "P") {
+                onboard.insert(i);
+                onboardLoad += pkgWeight(data, i);
+            } else if (type == "DL") {
+                int pickupNode = -1;
+                for (int p = 1; p < data.numNodes; ++p) {
+                    if (data.pairIds[p] == data.pairIds[i] && data.nodeTypes[p] == "P") {
+                        pickupNode = p;
+                        break;
+                    }
+                }
+                if (pickupNode != -1) {
+                    onboard.erase(pickupNode);
+                    onboardLoad -= pkgWeight(data, i);
+                }
+            } else { // "D": Delivery C1
+                onboard.erase(i);
+                onboardLoad -= pkgWeight(data, i);
+            }
+        }
+        t += data.truckServiceTime;
+    }
+
+    mergeConsecutiveDepotStops(r);
+    removeEmptyIntermediateDepotStops(r);
+}
+
+static void rebuildDepotLoads(SolutionEncoding& child, const PDPData& data) {
+    for (auto& r : child) rebuildDepotLoadsForRoute(r, data);
+}
+
+void repairSolution(SolutionEncoding& child, const PDPData& data) {
+    // 1) Repair customer uniqueness is assumed from crossover; we keep it minimal here.
+
+    // 2) Remove duplicated package supply (resupply vs depot load, and multiple resupplies)
+    repairInvalidResupplyPositions(child);
+    repairDroneCapacity(child, data);
+    dedupPackageSupply(child);
+
+    // 3) Rebuild depot loads for unsupplied packages
+    rebuildDepotLoads(child, data);
+
+    removeEmptyResupplyMarkers(child);
+}
+
+static vector<int> onePointCrossoverFlat(const vector<int>& f1, const vector<int>& f2, mt19937& gen) {
+    if (f1.size() != f2.size() || f1.size() < 2) return f1;
+    uniform_int_distribution<int> dist(1, (int)f1.size() - 1);
+    int c = dist(gen);
+
+    vector<int> child;
+    child.reserve(f1.size());
+    child.insert(child.end(), f1.begin(), f1.begin() + c);
+
+    unordered_set<int> used(child.begin(), child.end());
+    for (int x : f2) {
+        if (!used.count(x)) {
+            child.push_back(x);
+            used.insert(x);
+        }
+    }
+    return child;
+}
+
+static vector<int> twoPointCrossoverFlat(const vector<int>& f1, const vector<int>& f2, mt19937& gen) {
+    if (f1.size() != f2.size() || f1.size() < 3) return f1;
+    uniform_int_distribution<int> dist(0, (int)f1.size() - 1);
+    int c1 = dist(gen);
+    int c2 = dist(gen);
+    if (c1 > c2) std::swap(c1, c2);
+    if (c1 == c2) return f1;
+
+    vector<int> child(f1.size(), -1);
+    for (int i = c1; i <= c2; ++i) child[i] = f1[i];
+
+    unordered_set<int> used;
+    for (int x : child) if (x != -1) used.insert(x);
+
+    vector<int> missing;
+    missing.reserve(f1.size());
+    for (int x : f2) if (!used.count(x)) missing.push_back(x);
+
+    int mi = 0;
+    for (int i = 0; i < (int)child.size(); ++i) {
+        if (child[i] == -1) child[i] = missing[mi++];
+    }
+    return child;
+}
+
+static SolutionEncoding crossoverWithResupplyReuse(const SolutionEncoding& p1,
+                                                  const SolutionEncoding& p2,
+                                                  const PDPData& data,
+                                                  mt19937& gen,
+                                                  bool twoPoint) {
+    // Extract customer routes
+    auto r1 = extractCustomerRoutes(p1);
+    auto r2 = extractCustomerRoutes(p2);
+
+    // Flatten
+    auto f1 = flatten(r1);
+    auto f2 = flatten(r2);
+
+    // Route lengths from parent 1
+    auto lens = routeLengths(r1);
+
+    // Crossover
+    vector<int> childFlat = twoPoint ? twoPointCrossoverFlat(f1, f2, gen)
+                                     : onePointCrossoverFlat(f1, f2, gen);
+    auto childRoutes = splitByLengths(childFlat, lens);
+
+    // Initialize empty encoded routes [0, customers..., 0]
+    repairC2Pairs(childRoutes, data);
+    SolutionEncoding child = initializeEmptyEncodedRoutes(childRoutes);
+
+    // Extract candidate resupply trips
+    auto trips1 = extractResupplyTrips(p1, 1);
+    auto trips2 = extractResupplyTrips(p2, 2);
+
+    unordered_map<string, Trip> merged;
+    merged.reserve(trips1.size() + trips2.size());
+
+    auto absorb = [&](vector<Trip>& trips) {
+        for (auto& t : trips) {
+            string key = tripKey(t.h, t.pkgs);
+            auto it = merged.find(key);
+            if (it == merged.end()) {
+                merged.emplace(key, t);
+            } else {
+                it->second.origin |= t.origin;
+            }
+        }
+    };
+    absorb(trips1);
+    absorb(trips2);
+
+    vector<Trip> candidates;
+    candidates.reserve(merged.size());
+    for (auto& kv : merged) candidates.push_back(std::move(kv.second));
+
+    // Sort candidates: prefer appearing in both parents, then by |P| desc
+    sort(candidates.begin(), candidates.end(), [](const Trip& a, const Trip& b) {
+        const int ca = (a.origin == 3) ? 1 : 0;
+        const int cb = (b.origin == 3) ? 1 : 0;
+        if (ca != cb) return ca > cb;
+        if (a.pkgs.size() != b.pkgs.size()) return a.pkgs.size() > b.pkgs.size();
+        if (a.h != b.h) return a.h < b.h;
+        return a.pkgs < b.pkgs;
+    });
+
+    // Insert resupplies (structure-only); feasibility handled in repair via decode_solution.
+    unordered_set<int> supplied;
+    auto childIndex = buildCustomerIndex(child);
+
+    const double QD = (double)data.getDroneCapacity();
+
+    for (const auto& trip : candidates) {
+        vector<int> valid = getValidPackageSubset(trip, childIndex, supplied);
+        vector<int> filteredValid;
+        for (int p : valid) {
+            if (p > 0 && p < (int)data.nodeTypes.size() && (data.nodeTypes[p] == "P" || data.nodeTypes[p] == "DL")) {
+                continue;
+            }
+            filteredValid.push_back(p);
+        }
+        valid.swap(filteredValid);
+        if (valid.empty()) continue;
+
+        double load = 0.0;
+        for (int p : valid) load += pkgWeight(data, p);
+        if (load > QD + 1e-9) {
+            // Trim by keeping those served soonest after h (repairDroneCapacity will also do this)
+            // For now, skip; repair will not recover subset without extra logic.
+            continue;
+        }
+
+        // Add to resupply marker at node h
+        auto itH = childIndex.find(trip.h);
+        if (itH == childIndex.end()) continue;
+        Route& r = child[itH->second.route_id];
+
+        // Find the actual RouteStop for node h
+        for (auto& st : r) {
+            if (st.node == trip.h) {
+                // Append packages (dedup later)
+                st.packages.insert(st.packages.end(), valid.begin(), valid.end());
+                break;
+            }
+        }
+
+        for (int p : valid) supplied.insert(p);
+    }
+
+    // Repair + build depot loads for the rest
+    repairSolution(child, data);
 
     return child;
 }
 
-// ---- PMX Crossover ----
-Chromosome pmxCrossover(const Chromosome& p1, const Chromosome& p2, mt19937& gen) {
-    vector<Gene> c1, c2;
-    vector<pair<int, Gene>> spec;
-    splitChromosome(p1, c1, spec);
-    for (auto& g : p2) if (g.node_id > 0) c2.push_back(g);
+static void customerSwapMutation(SolutionEncoding& sol, const PDPData& data, mt19937& gen) {
+    auto routes = extractCustomerRoutes(sol);
+    auto flat = flatten(routes);
+    if (flat.size() < 2) return;
 
-    int n = (int)c1.size();
-    if (n == 0) return p1;
+    uniform_int_distribution<int> dist(0, (int)flat.size() - 1);
+    int a = dist(gen);
+    int b = dist(gen);
+    if (a == b) return;
+    swap(flat[a], flat[b]);
 
-    uniform_int_distribution<> d(0, n - 1);
-    int a = d(gen), b = d(gen);
-    if (a > b) swap(a, b);
+    auto lens = routeLengths(routes);
+    auto mutatedRoutes = splitByLengths(flat, lens);
+    repairC2Pairs(mutatedRoutes, data);
+    sol = initializeEmptyEncodedRoutes(mutatedRoutes);
+}
 
-    vector<Gene> child = c1;
-    map<int, int> mapping; // c1.node_id -> c2.node_id
-    for (int i = a; i <= b; ++i) {
-        mapping[c1[i].node_id] = c2[i].node_id;
-        child[i] = c2[i];
+static void droneResupplyMutation(SolutionEncoding& sol, const PDPData& data, mt19937& gen) {
+    if (sol.empty()) return;
+
+    uniform_int_distribution<int> truckDist(0, (int)sol.size() - 1);
+    int k = truckDist(gen);
+    Route& r = sol[k];
+
+    // Collect customer stops positions
+    vector<int> customerPos;
+    for (int i = 0; i < (int)r.size(); ++i) if (r[i].node > 0) customerPos.push_back(i);
+    if (customerPos.size() < 2) return;
+
+    uniform_int_distribution<int> posDist(0, (int)customerPos.size() - 2);
+    int hIdxInCustomerList = posDist(gen);
+    int hStopIdx = customerPos[hIdxInCustomerList];
+
+    // Build list of candidate packages from later customers in the same route.
+    vector<int> later;
+    for (int t = hIdxInCustomerList; t < (int)customerPos.size(); ++t) {
+        int stopIdx = customerPos[t];
+        int pkg = r[stopIdx].node;
+        later.push_back(pkg);
     }
 
-    map<int, Gene> gene1, gene2;
-    for (const auto& g : c1) gene1[g.node_id] = g;
-    for (const auto& g : c2) gene2[g.node_id] = g;
-
-    for (int i = 0; i < n; ++i) {
-        if (i >= a && i <= b) continue;
-        int v = c1[i].node_id;
-        while (mapping.count(v)) v = mapping[v];
-        auto it2 = gene2.find(v);
-        if (it2 != gene2.end()) child[i] = it2->second;
-        else if (gene1.count(v)) child[i] = gene1[v];
-    }
-
-    return reassemble(child, spec, (int)p1.size());
-}
-
-// ---- CX Crossover ----
-Chromosome cycleCrossover(const Chromosome& p1, const Chromosome& p2, mt19937& gen) {
-    vector<Gene> c1, c2;
-    vector<pair<int, Gene>> spec;
-    splitChromosome(p1, c1, spec);
-    for (auto& g : p2) if (g.node_id > 0) c2.push_back(g);
-
-    int n = (int)c1.size();
-    if (n == 0) return p1;
-
-    map<int, int> pos1;
-    for (int i = 0; i < n; ++i) pos1[c1[i].node_id] = i;
-
-    vector<Gene> child(n, Gene(0));
-    for (auto& g : child) g.resupply_vector.clear();
-
-    vector<bool> visited(n, false);
-    bool take_from_p1 = true;
-    for (int start = 0; start < n; ++start) {
-        if (visited[start]) continue;
-        int idx = start;
-        do {
-            visited[idx] = true;
-            child[idx] = take_from_p1 ? c1[idx] : c2[idx];
-            int next_id = take_from_p1 ? c2[idx].node_id : c1[idx].node_id;
-            idx = pos1.count(next_id) ? pos1[next_id] : start;
-        } while (idx != start);
-        take_from_p1 = !take_from_p1;
-    }
-
-    return reassemble(child, spec, (int)p1.size());
-}
-
-// ---- Mutation operators (operate on full Chromosome incl. 0/-1) ----
-void swapMutation(Chromosome& s, mt19937& g) {
-    if(s.size()<2) return;
-    uniform_int_distribution<> d(0,s.size()-1);
-    swap(s[d(g)],s[d(g)]);
-}
-void inversionMutation(Chromosome& s, mt19937& g) {
-    if(s.size()<2) return;
-    uniform_int_distribution<> d(0,s.size()-1);
-    int a=d(g),b=d(g); if(a>b) swap(a,b);
-    reverse(s.begin()+a,s.begin()+b+1);
-}
-void scrambleMutation(Chromosome& s, mt19937& g) {
-    if(s.size()<2) return;
-    uniform_int_distribution<> d(0,s.size()-1);
-    int a=d(g),b=d(g); if(a>b) swap(a,b);
-    shuffle(s.begin()+a,s.begin()+b+1,g);
-}
-void insertionMutation(Chromosome& s, mt19937& g) {
-    if(s.size()<2) return;
-    uniform_int_distribution<> d(0,s.size()-1);
-    int from=d(g),to=d(g); if(from==to) return;
-    Gene elem=s[from]; s.erase(s.begin()+from);
-    int ins=to; if(to>from) ins--;
-    ins=max(0,min(ins,(int)s.size()));
-    s.insert(s.begin()+ins,elem);
-}
-void displacementMutation(Chromosome& s, mt19937& g) {
-    if(s.size()<3) return;
-    uniform_int_distribution<> d(0,s.size()-1);
-    int a=d(g),b=d(g); if(a>b) swap(a,b);
-    if(a==b){ if(b<(int)s.size()-1) b++; else if(a>0) a--; else return; }
-    Chromosome seg(s.begin()+a,s.begin()+b+1);
-    s.erase(s.begin()+a,s.begin()+b+1);
-    vector<int> valid;
-    for(int i=0;i<=(int)s.size();i++) valid.push_back(i);
-    if(valid.empty()) return;
-    uniform_int_distribution<> pd(0,(int)valid.size()-1);
-    int ins=valid[pd(g)];
-    s.insert(s.begin()+ins,seg.begin(),seg.end());
-}
-
-// ---- Drone Resupply Mutation (NEW) ----
-void droneResupplyMutation(Chromosome& seq, const PDPData& data, mt19937& gen) {
-    // Collect indices with non-empty resupply_vector
-    vector<int> sources;
-    for(int i=0;i<(int)seq.size();i++)
-        if(seq[i].node_id>0 && !seq[i].resupply_vector.empty())
-            sources.push_back(i);
-    if(sources.empty()) return;
-    uniform_int_distribution<> sd(0,(int)sources.size()-1);
-    int srcIdx=sources[sd(gen)];
-    auto& rv=seq[srcIdx].resupply_vector;
-    // Pop random package
-    uniform_int_distribution<> pd(0,(int)rv.size()-1);
-    int pick=pd(gen);
-    int pkg=rv[pick];
-    rv.erase(rv.begin()+pick);
-    // Find the delivery node for this package (pkg itself is the customer node)
-    // Insert into resupply_vector of a random Gene B (node_id>0) before pkg's position
-    int pkg_pos=-1;
-    for(int i=0;i<(int)seq.size();i++) if(seq[i].node_id==pkg){pkg_pos=i;break;}
-    // Candidates: node_id>0, index < pkg_pos (or any if pkg not found)
-    vector<int> cands;
-    for(int i=0;i<(int)seq.size();i++)
-        if(seq[i].node_id>0 && i!=srcIdx && (pkg_pos<0||i<pkg_pos))
-            cands.push_back(i);
-    if(cands.empty()){ rv.insert(rv.begin()+pick,pkg); return; } // rollback
-    uniform_int_distribution<> cd(0,(int)cands.size()-1);
-    seq[cands[cd(gen)]].resupply_vector.push_back(pkg);
-}
-
-// ---- Repair Sequence ----
-void repairSequence(Chromosome& seq, const PDPData& data, mt19937& gen) {
-    // --- node_id > 0: exactly once each ---
-    map<int,int> cnt;
-    for(auto& g:seq) if(g.node_id>0&&data.isCustomer(g.node_id)) cnt[g.node_id]++;
-    vector<int> missing;
-    for(int i=0;i<data.numNodes;i++) if(data.isCustomer(i)&&cnt[i]==0) missing.push_back(i);
-    shuffle(missing.begin(),missing.end(),gen);
-    int mi=0;
-    for(auto& g:seq){
-        if(g.node_id>0&&data.isCustomer(g.node_id)&&cnt[g.node_id]>1&&mi<(int)missing.size()){
-            cnt[g.node_id]--; g.node_id=missing[mi++];
+    // Remove packages already in some resupply
+    unordered_set<int> already;
+    for (const auto& st : r) {
+        if (st.node > 0) {
+            for (int p : st.packages) already.insert(p);
         }
     }
-    for(;mi<(int)missing.size();mi++) seq.push_back(Gene(missing[mi]));
 
-    // --- node_id == 0: exactly one separator ---
-    vector<int> sepPos;
-    for(int i=0;i<(int)seq.size();i++) if(seq[i].node_id==0) sepPos.push_back(i);
-    if(sepPos.empty()){
-        // Insert separator in middle
-        int mid=max(1,(int)seq.size()/2);
-        seq.insert(seq.begin()+mid,Gene(0));
-    } else if(sepPos.size()>1){
-        // Keep first, remove rest (from back to avoid index shift)
-        for(int k=(int)sepPos.size()-1;k>=1;k--)
-            seq.erase(seq.begin()+sepPos[k]);
+    vector<int> cand;
+    for (int p : later) {
+        if (!already.count(p)) {
+            if (p > 0 && p < (int)data.nodeTypes.size()) {
+                if (data.nodeTypes[p] == "P" || data.nodeTypes[p] == "DL") continue;
+            }
+            cand.push_back(p);
+        }
     }
-    // --- node_id == -1: leave untouched ---
+    if (cand.empty()) return;
 
-    // --- P before DL precedence ---
-    map<int,int> posP,posDL;
-    for(int i=0;i<(int)seq.size();i++){
-        if(seq[i].node_id<=0) continue;
-        int id=seq[i].node_id;
-        if(id>=(int)data.pairIds.size()) continue;
-        int pid=data.pairIds[id];
-        if(pid<=0) continue;
-        if(data.nodeTypes[id]=="P")  posP[pid]=i;
-        if(data.nodeTypes[id]=="DL") posDL[pid]=i;
+    shuffle(cand.begin(), cand.end(), gen);
+
+    const double QD = (double)data.getDroneCapacity();
+    vector<int> chosen;
+    double load = 0.0;
+    for (int p : cand) {
+        const double w = pkgWeight(data, p);
+        if (load + w <= QD + 1e-9) {
+            chosen.push_back(p);
+            load += w;
+        }
     }
-    for(auto& kv:posP){
-        auto it=posDL.find(kv.first);
-        if(it==posDL.end()) continue;
-        if(kv.second>it->second) swap(seq[kv.second].node_id,seq[it->second].node_id);
-    }
+    if (chosen.empty()) return;
+
+    // Insert into h[P]
+    r[hStopIdx].packages.insert(r[hStopIdx].packages.end(), chosen.begin(), chosen.end());
+
+    // Repair / dedup / rebuild depot loads
+    repairSolution(sol, data);
 }
 
-// ---- Selection ----
-Chromosome tournamentSelection(const vector<Chromosome>& pop,
-                               const vector<double>& fit,
-                               int k, mt19937& gen) {
-    uniform_int_distribution<> d(0,pop.size()-1);
-    int best=d(gen);
-    for(int i=1;i<k;i++){int idx=d(gen);if(fit[idx]<fit[best])best=idx;}
+static SolutionEncoding tournamentSelection(const vector<SolutionEncoding>& pop,
+                                           const vector<double>& fit,
+                                           int tournamentSize,
+                                           mt19937& gen) {
+    uniform_int_distribution<int> dist(0, (int)pop.size() - 1);
+    int best = dist(gen);
+    for (int i = 1; i < tournamentSize; ++i) {
+        int idx = dist(gen);
+        if (fit[idx] < fit[best]) best = idx;
+    }
     return pop[best];
 }
 
-static bool evalImproved(const Chromosome& child,const Chromosome& p1,const Chromosome& p2){
-    int n=child.size(),d1=0,d2=0;
-    for(int i=0;i<n;i++){
-        if(child[i].node_id!=p1[i].node_id) d1++;
-        if(child[i].node_id!=p2[i].node_id) d2++;
-    }
-    int thr=max(1,n/5);
-    return d1>=thr&&d2>=thr;
-}
-static bool mutImproved(const Chromosome& a,const Chromosome& b){
-    if(a.size()!=b.size()) return true;
-    for(int i=0;i<(int)a.size();i++) if(a[i].node_id!=b[i].node_id) return true;
-    return false;
-}
+// } // namespace
 
-// ============================================================
-// === MAIN GA ================================================
-// ============================================================
+PDPSolution geneticAlgorithmPDP(const PDPData& data,
+                                int populationSize,
+                                int maxGenerations,
+                                double mutationRate,
+                                int runNumber,
+                                bool isSmallScale,
+                                std::ostream* logStream,
+                                int logEvery) {
+    (void)isSmallScale;
+    if (logEvery <= 0) logEvery = 1;
 
-PDPSolution geneticAlgorithmPDP(const PDPData& data, int popSize,
-                                int maxGen, double mutRate, int runNum, bool /*small*/) {
-    mt19937 rng(random_device{}() + (unsigned)runNum*12345u);
-    cout << "\n=== GENETIC ALGORITHM + TABU (Gene-based) ===\n"
-         << "Pop=" << popSize << " Gen=" << maxGen << " MutRate=" << mutRate << "\n";
+    // Init population
+    vector<SolutionEncoding> population = initStructuredPopulationPDP(populationSize, data, runNumber);
 
-    AdaptiveParams ap(mutRate);
-    OnlineSurrogate sur;
-    SolutionCache cache;
+    std::seed_seq seed{runNumber, populationSize, maxGenerations, data.numNodes};
+    mt19937 gen(seed);
+    uniform_real_distribution<double> prob(0.0, 1.0);
 
-    // Init population (vector<Chromosome> from initStructuredPopulationPDP)
-    vector<Chromosome> pop = initStructuredPopulationPDP(popSize, data, runNum);
+    PDPSolution best;
+    best.totalCost = numeric_limits<double>::infinity();
+    best.totalPenalty = numeric_limits<double>::infinity();
+    bool hasBest = false;
+    int stagnation_counter = 0;
 
-    vector<double> fit(popSize);
-    PDPSolution bestSol; bestSol.totalCost = numeric_limits<double>::infinity();
-    Chromosome   bestSeq;
+    struct PopStats {
+        double bestFitness = numeric_limits<double>::infinity();
+        double bestCost = numeric_limits<double>::infinity();
+        double bestPenalty = numeric_limits<double>::infinity();
+        double avgFitness = 0.0;
+        int feasibleCount = 0;
+    };
 
-    for(int i=0;i<popSize;i++){
-        auto s=evalChr(pop[i],data,cache);
-        fit[i]=s.totalCost+s.totalPenalty;
-        if(fit[i]<bestSol.totalCost+bestSol.totalPenalty){ bestSol=s; bestSeq=pop[i]; }
-    }
-    cout << "Init best: " << fixed << setprecision(2) << bestSol.totalCost
-         << " (pen=" << bestSol.totalPenalty << ")\n";
+    auto evaluatePopulation = [&](const vector<SolutionEncoding>& pop,
+                                  vector<double>& fit) -> PopStats {
+        PopStats st;
+        if (pop.empty()) return st;
+        fit.assign(pop.size(), 0.0);
+        for (size_t i = 0; i < pop.size(); ++i) {
+            const SolutionEncoding& ind = pop[i];
+            PDPSolution sol = decode_solution(ind, data, false);
+            sol.encoded_routes = ind;
 
-    int noImpCtr=0, noImpEval=0;
-    int tabuThr = data.numCustomers<=20 ? max(100,popSize*5) : max(200,popSize*20);
-    int tabuRounds=0;
-    int adaptInt=max(5,maxGen/20);
+            const double fitness = sol.totalCost + sol.totalPenalty;
+            fit[i] = fitness;
+            st.avgFitness += fitness;
+            if (sol.isFeasible) st.feasibleCount++;
 
-    for(int gen=0;gen<maxGen;gen++){
-        // --- Crossover ---
-        vector<Chromosome> offspring;
-        vector<int>        cxTypes;
-        vector<pair<double,double>> parentFit;
-
-        auto chooseCrossover = [&]() -> int {
-            const double eps = 0.05;
-            vector<double> weights(4, eps);
-            for (int i = 0; i < 4; ++i) {
-                if (ap.crossoverUsage[i] > 0) {
-                    double rate = ap.crossoverSuccess[i] / ap.crossoverUsage[i];
-                    weights[i] = rate + eps;
-                }
+            if (fitness < st.bestFitness) {
+                st.bestFitness = fitness;
+                st.bestCost = sol.totalCost;
+                st.bestPenalty = sol.totalPenalty;
             }
-            discrete_distribution<> pick(weights.begin(), weights.end());
-            return pick(rng);
-        };
 
-        for(int i=0;i<popSize;i++){
-            auto p1=tournamentSelection(pop,fit,3,rng);
-            auto p2=tournamentSelection(pop,fit,3,rng);
-            // Track parent fitness for proxy
-            double f1=fit[0],f2=fit[0];
-            for(int j=0;j<(int)pop.size();j++){
-                bool m1=true,m2=true;
-                for(int k=0;k<(int)pop[j].size()&&(m1||m2);k++){
-                    if(pop[j][k].node_id!=p1[k].node_id) m1=false;
-                    if(pop[j][k].node_id!=p2[k].node_id) m2=false;
-                }
-                if(m1) f1=fit[j];
-                if(m2) f2=fit[j];
+            // Global best selection: prefer feasible, then lowest cost; else lowest fitness.
+            if (!hasBest || (sol.isFeasible && (!best.isFeasible || sol.totalCost < best.totalCost)) ||
+                (!sol.isFeasible && !best.isFeasible && fitness < (best.totalCost + best.totalPenalty))) {
+                best = sol;
+                hasBest = true;
             }
-            parentFit.push_back({f1,f2});
+        }
+        st.avgFitness /= (double)pop.size();
+        return st;
+    };
 
-            int ct=chooseCrossover(); cxTypes.push_back(ct);
-            Chromosome child;
-            if(ct==0)      child=onePointCrossover(p1,p2,rng);
-            else if(ct==1) child=orderCrossover(p1,p2,rng);
-            else if(ct==2) child=pmxCrossover(p1,p2,rng);
-            else           child=cycleCrossover(p1,p2,rng);
-            repairSequence(child,data,rng);
-            offspring.push_back(child);
+    vector<double> fitness;
+    PopStats initStats = evaluatePopulation(population, fitness);
+
+    if (logStream) {
+        (*logStream) << "[GA] start pop=" << populationSize
+                     << " gen=" << maxGenerations
+                     << " mut=" << mutationRate
+                     << " customers=" << data.numCustomers
+                     << " trucks=" << data.numTrucks
+                     << " drones=" << data.numDrones << "\n";
+        (*logStream) << "[GA] gen=-1 feasible=" << initStats.feasibleCount
+                     << "/" << population.size()
+                     << " bestFitness=" << initStats.bestFitness
+                     << " bestCmax=" << initStats.bestCost
+                     << " bestPenalty=" << initStats.bestPenalty
+                     << " avgFitness=" << initStats.avgFitness << "\n";
+    }
+
+    const int tournamentSize = 5;
+    const int eliteCount = 1;
+
+    for (int genIdx = 0; genIdx < maxGenerations; ++genIdx) {
+        int madeChildren = 0;
+        int usedTwoPointCount = 0;
+        int customerMutationCount = 0;
+        int droneMutationCount = 0;
+
+        vector<SolutionEncoding> nextPop;
+        nextPop.reserve(population.size());
+
+        // Elitism: keep best individual seen so far (encoded_routes from best)
+        if (eliteCount > 0 && hasBest) {
+            nextPop.push_back(best.encoded_routes);
         }
 
-        // --- Mutation ---
-        int mutCnt=(int)(offspring.size()*ap.currentMutationRate);
-        uniform_int_distribution<> od(0,offspring.size()-1);
-        for(int i=0;i<mutCnt;i++){
-            int idx=od(rng);
-            Chromosome orig=offspring[idx];
-            int mt=ap.selectMutationType(rng);
-            if(mt==0)      swapMutation(offspring[idx],rng);
-            else if(mt==1) inversionMutation(offspring[idx],rng);
-            else if(mt==2) scrambleMutation(offspring[idx],rng);
-            else if(mt==3) insertionMutation(offspring[idx],rng);
-            else if(mt==4) displacementMutation(offspring[idx],rng);
-            else           droneResupplyMutation(offspring[idx],data,rng);
-            repairSequence(offspring[idx],data,rng);
-            ap.updateMutationSuccess(mt,mutImproved(offspring[idx],orig));
+        while ((int)nextPop.size() < populationSize) {
+            SolutionEncoding p1 = tournamentSelection(population, fitness, tournamentSize, gen);
+            SolutionEncoding p2 = tournamentSelection(population, fitness, tournamentSize, gen);
+
+            bool useTwoPoint = (prob(gen) < 0.5);
+            if (useTwoPoint) usedTwoPointCount++;
+            SolutionEncoding child = crossoverWithResupplyReuse(p1, p2, data, gen, useTwoPoint);
+            madeChildren++;
+
+            if (prob(gen) < mutationRate) {
+                customerSwapMutation(child, data, gen);
+                customerMutationCount++;
+                // After customer-only mutation, re-add some drone structure with a chance.
+                if (prob(gen) < 0.5) {
+                    droneResupplyMutation(child, data, gen);
+                    droneMutationCount++;
+                }
+                // Ensure feasibility structure
+                // (customerSwapMutation resets to empty encoding; repair adds depot loads)
+                // For safety:
+                // repairSolution(child, data);
+                // rebuildDepotLoads(child, data);
+                PDPSolution tmp = decode_solution(child, data, false);
+                (void)tmp;
+            } else if (prob(gen) < 0.2) {
+                // Occasional drone mutation even without customer mutation
+                droneResupplyMutation(child, data, gen);
+                droneMutationCount++;
+            }
+
+            nextPop.push_back(std::move(child));
         }
 
-        // --- Evaluate offspring (full fitness) ---
-        vector<double> offit(offspring.size(), 0.0);
-        int decoded = 0;
-        for (int i = 0; i < (int)offspring.size(); ++i) {
-            auto s = evalChr(offspring[i], data, cache);
-            offit[i] = s.totalCost + s.totalPenalty;
-            decoded++;
+        population.swap(nextPop);
 
-            double parent_best = (i < (int)parentFit.size())
-                ? min(parentFit[i].first, parentFit[i].second)
-                : numeric_limits<double>::infinity();
-            ap.updateCrossoverSuccess(cxTypes[i], offit[i] < parent_best);
-        }
-        if(gen>0&&gen%20==0)
-            cout << "[Gen " << gen << "] best=" << (bestSol.totalCost + bestSol.totalPenalty)
-                 << " decoded=" << decoded << "/" << offspring.size() << "\n";
+        double prevBestCost = best.totalCost;
+        double prevBestPenalty = best.totalPenalty;
+        bool prevBestFeasible = best.isFeasible;
 
-        // --- Selection: 50% best offspring, 20% random offspring, 30% best parents ---
-        int nBO=(int)(popSize*0.5), nRO=(int)(popSize*0.2), nBP=popSize-nBO-nRO;
-        vector<int> oi(offspring.size()); iota(oi.begin(),oi.end(),0);
-        sort(oi.begin(),oi.end(),[&](int a,int b){return offit[a]<offit[b];});
-        vector<int> pi(pop.size()); iota(pi.begin(),pi.end(),0);
-        sort(pi.begin(),pi.end(),[&](int a,int b){return fit[a]<fit[b];});
+        PopStats genStats = evaluatePopulation(population, fitness);
 
-        vector<Chromosome> newPop; vector<double> newFit;
-        for(int i=0;i<nBO;i++){newPop.push_back(offspring[oi[i]]);newFit.push_back(offit[oi[i]]);}
-        {   vector<int> rem; for(int i=nBO;i<(int)oi.size();i++) rem.push_back(oi[i]);
-            shuffle(rem.begin(),rem.end(),rng);
-            int ta=min(nRO,(int)rem.size());
-            for(int i=0;i<ta;i++){newPop.push_back(offspring[rem[i]]);newFit.push_back(offit[rem[i]]);}
-        }
-        for(int i=0;i<nBP;i++){newPop.push_back(pop[pi[i]]);newFit.push_back(fit[pi[i]]);}
-        pop=newPop; fit=newFit;
-
-        // Update best
-        if(fit[0]<bestSol.totalCost+bestSol.totalPenalty){
-            auto s=evalChr(pop[0],data,cache);
-            bestSol=s; bestSeq=pop[0];
-            noImpCtr=0; noImpEval=0; ap.noImprovementCount=0;
-            ap.currentMutationRate = ap.baseMutationRate;
-            cout << "Gen " << gen << ": best=" << fixed << setprecision(2)
-                 << bestSol.totalCost << " (pen=" << bestSol.totalPenalty << ")\n";
+        bool improved = false;
+        if (!hasBest) {
+            // Should not happen
         } else {
-            noImpCtr++; noImpEval+=decoded; ap.noImprovementCount++;
-            if (ap.noImprovementCount > 50) {
-                ap.currentMutationRate = min(0.8, ap.currentMutationRate * 1.05);
+            if (best.isFeasible != prevBestFeasible) {
+                if (best.isFeasible) improved = true;
+            } else if (best.isFeasible) {
+                if (best.totalCost < prevBestCost - 1e-5) improved = true;
+            } else {
+                double prevFit = prevBestCost + prevBestPenalty;
+                double currentFit = best.totalCost + best.totalPenalty;
+                if (currentFit < prevFit - 1e-5) improved = true;
             }
         }
 
-        // Adaptive rates
-        if(gen>0&&gen%adaptInt==0){
-            ap.adaptCrossoverRates(); ap.adaptMutationRates();
+        if (improved) {
+            stagnation_counter = 0;
+        } else {
+            stagnation_counter++;
         }
 
-        // --- Tabu phase ---
-        if(noImpEval>=tabuThr){
-            int topK=max(1,popSize/10);
-            cout << "\n[TABU] " << noImpEval << " evals stagnant. Tabu on top " << topK << "\n";
-            vector<int> si(popSize); iota(si.begin(),si.end(),0);
-            sort(si.begin(),si.end(),[&](int a,int b){return fit[a]<fit[b];});
-            double bestBefore=bestSol.totalCost+bestSol.totalPenalty;
+        // Trigger Tabu Search on stagnation (10% of maxGenerations)
+        if (stagnation_counter >= (int)(0.1 * maxGenerations)) {
+            int K = max(1, (int)(0.1 * population.size()));
+            vector<pair<double, int>> indexedFitness(population.size());
+            for (size_t i = 0; i < population.size(); ++i) {
+                indexedFitness[i] = {fitness[i], (int)i};
+            }
+            sort(indexedFitness.begin(), indexedFitness.end());
 
-            for(int k=0;k<topK;k++){
-                int idx=si[k];
-                Chromosome start=pop[idx];
-                if(k>0) start=doubleBridgePerturbation(start,rng);
-                repairSequence(start,data,rng);
-                try {
-                    Chromosome tabuRes=tabuSearchPDP(start,data,50,cache);
-                    repairSequence(tabuRes,data,rng);
-                    auto ts=evalChr(tabuRes,data,cache);
-                    double tf=ts.totalCost+ts.totalPenalty;
-                    if(tf<fit[idx]){
-                        pop[idx]=tabuRes; fit[idx]=tf;
-                        cout << "  [TABU] idx=" << idx << " -> " << tf << "\n";
-                        if(tf<bestBefore){ bestSeq=tabuRes; bestSol=ts; bestBefore=tf; }
-                    }
-                } catch(const exception& e){ cerr << "Tabu err: " << e.what() << "\n"; }
+            if (logStream) {
+                (*logStream) << "[GA-TS] Stagnation reached at gen=" << genIdx 
+                             << " (" << stagnation_counter << " gens stagnant). Running TS on " 
+                             << K << " elite individuals...\n";
             }
 
-            noImpCtr=0; noImpEval=0; tabuRounds++;
-
-            // Diversity restart after 3 stagnant tabu rounds
-            if(tabuRounds>=3&&bestSol.totalCost+bestSol.totalPenalty>=bestBefore-0.01){
-                cout << "[DIVERSITY] Restarting 80% of population\n";
-                iota(si.begin(),si.end(),0);
-                sort(si.begin(),si.end(),[&](int a,int b){return fit[a]<fit[b];});
-                int keep=max(2,popSize/5);
-                auto newInds=initStructuredPopulationPDP(popSize-keep,data,runNum+gen);
-                int ri=0;
-                for(int k=keep;k<popSize;k++){
-                    pop[si[k]]= ri<(int)newInds.size()? newInds[ri++]
-                              : doubleBridgePerturbation(bestSeq,rng);
-                    repairSequence(pop[si[k]],data,rng);
-                    auto s=evalChr(pop[si[k]],data,cache);
-                    fit[si[k]]=s.totalCost+s.totalPenalty;
-                }
-                tabuRounds=0;
+            double globalBestFit = best.totalCost + best.totalPenalty;
+            for (int i = 0; i < K; ++i) {
+                int idx = indexedFitness[i].second;
+                SolutionEncoding refined = tabuSearchPDP(population[idx], data, 50, globalBestFit, 7);
+                population[idx] = refined;
             }
+
+            stagnation_counter = 0;
+
+            // Re-evaluate population after Tabu Search updates
+            genStats = evaluatePopulation(population, fitness);
+
+            if (logStream) {
+                (*logStream) << "[GA-TS] TS complete. New global best Cmax=" << best.totalCost 
+                             << " Penalty=" << best.totalPenalty 
+                             << " Feasible=" << (best.isFeasible ? 1 : 0) << "\n";
+            }
+        }
+        if (logStream && (genIdx % logEvery == 0 || genIdx + 1 == maxGenerations)) {
+            (*logStream) << "[GA] gen=" << genIdx
+                         << " feasible=" << genStats.feasibleCount << "/" << population.size()
+                         << " bestFitness=" << genStats.bestFitness
+                         << " bestCmax=" << genStats.bestCost
+                         << " bestPenalty=" << genStats.bestPenalty
+                         << " avgFitness=" << genStats.avgFitness
+                         << " children=" << madeChildren
+                         << " twoPoint=" << usedTwoPointCount
+                         << " mutCustomer=" << customerMutationCount
+                         << " mutDrone=" << droneMutationCount
+                         << " globalBestCmax=" << best.totalCost
+                         << " globalBestPenalty=" << best.totalPenalty
+                         << " globalBestFeasible=" << (best.isFeasible ? 1 : 0)
+                         << "\n";
         }
     }
 
-    cout << "\n=== GA DONE ===\n"
-         << "Final best: " << fixed << setprecision(2) << bestSol.totalCost
-         << " (pen=" << bestSol.totalPenalty << ")\n";
-    return bestSol;
+    return best;
 }
 
+void repairC2Pairs(vector<vector<int>>& routes, const PDPData& data) {
+    for (int i = 1; i < data.numNodes; ++i) {
+        if (data.nodeTypes[i] == "P") {
+            int pairId = data.pairIds[i];
+            int d = -1;
+            for (int j = 1; j < data.numNodes; ++j) {
+                if (data.pairIds[j] == pairId && data.nodeTypes[j] == "DL") {
+                    d = j;
+                    break;
+                }
+            }
+            if (d == -1) continue;
+
+            int route_p = -1, pos_p = -1;
+            int route_d = -1, pos_d = -1;
+            for (int rIdx = 0; rIdx < (int)routes.size(); ++rIdx) {
+                for (int sIdx = 0; sIdx < (int)routes[rIdx].size(); ++sIdx) {
+                    if (routes[rIdx][sIdx] == i) {
+                        route_p = rIdx;
+                        pos_p = sIdx;
+                    }
+                    if (routes[rIdx][sIdx] == d) {
+                        route_d = rIdx;
+                        pos_d = sIdx;
+                    }
+                }
+            }
+
+            if (route_p == -1 || route_d == -1) continue;
+
+            if (route_p != route_d) {
+                routes[route_d].erase(routes[route_d].begin() + pos_d);
+                routes[route_p].insert(routes[route_p].begin() + pos_p + 1, d);
+            } else if (pos_p > pos_d) {
+                swap(routes[route_p][pos_p], routes[route_p][pos_d]);
+            }
+        }
+    }
+}

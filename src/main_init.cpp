@@ -1,7 +1,7 @@
 /**
  * @file main_init.cpp
  * @brief Test harness for population initialization.
- *        Sử dụng kiến trúc mã hóa vector<Gene> (Chromosome).
+ *        Sử dụng encoding theo MD: 0[P], i, i[P], 0.
  *
  * Usage: ./main_init <instance_file> [pop_size]
  */
@@ -17,13 +17,13 @@
 #include "pdp_reader.h"
 #include "pdp_init.h"
 #include "pdp_fitness.h"
-#include "pdp_utils.h"   // printSolution, printChromosome
+#include "pdp_utils.h"   // printSolution, printEncodedSolution
 
 using namespace std;
 
 int main(int argc, char* argv[]) {
     cout << "==========================================================\n"
-         << "   PDP SOLVER - INITIALIZATION TEST (Gene-based encoding)\n"
+         << "   PDP SOLVER - INITIALIZATION TEST (MD encoding)\n"
          << "==========================================================\n";
 
     if (argc < 2) {
@@ -44,12 +44,11 @@ int main(int argc, char* argv[]) {
              << data.numCustomers << " customers)\n"
              << "Trucks: " << data.numTrucks   << "  Drones: " << data.numDrones << "\n";
 
-        // ---- [2] INITIALIZE POPULATION (returns vector<Chromosome>) ----
+        // ---- [2] INITIALIZE POPULATION (returns vector<SolutionEncoding>) ----
         cout << "\n--- [2] RUNNING INITIALIZATION ALGORITHMS ---\n";
         auto t0 = chrono::high_resolution_clock::now();
 
-        // initStructuredPopulationPDP returns vector<Chromosome> (= vector<vector<Gene>>)
-        vector<Chromosome> population = initStructuredPopulationPDP(popSize, data, 1);
+        vector<SolutionEncoding> population = initStructuredPopulationPDP(popSize, data, 1);
 
         double elapsed = chrono::duration<double>(
             chrono::high_resolution_clock::now() - t0).count();
@@ -63,15 +62,14 @@ int main(int argc, char* argv[]) {
 
         PDPSolution bestSol;
         bestSol.totalCost = numeric_limits<double>::max();
-        Chromosome  bestSeq;  // vector<Gene> — không còn vector<int>
+        SolutionEncoding bestEnc;
 
         int    feasibleCount = 0;
         double sumCost       = 0.0;
 
         for (size_t i = 0; i < population.size(); ++i) {
-            // Evaluate the full Chromosome (which includes resupply_vector) directly
-            PDPSolution sol = decode_sequence(population[i], data, false);
-            sol.original_sequence = population[i];
+            PDPSolution sol = decode_solution(population[i], data, false);
+            sol.encoded_routes = population[i];
 
             double fitness = sol.totalCost + sol.totalPenalty;
             sumCost += sol.totalCost;
@@ -89,7 +87,7 @@ int main(int argc, char* argv[]) {
 
             if (isNewBest) {
                 bestSol = sol;
-                bestSeq = population[i];   // vector<Gene>
+                bestEnc = population[i];
             }
         }
 
@@ -109,9 +107,8 @@ int main(int argc, char* argv[]) {
              << "  Penalty: " << bestSol.totalPenalty << "\n"
              << "  Feasible: " << (bestSol.isFeasible ? "YES" : "NO") << "\n";
 
-        // ---- In chromosome bằng hàm tiện ích (thay vòng lặp vector<int> cũ) ----
-        cout << "\n CHROMOSOME (best individual):\n";
-        printChromosome(bestSeq);   // vector<Gene> → định dạng [Node:X | Resupply:{...}]
+        cout << "\n ENCODING (best individual):\n";
+        printEncodedSolution(bestEnc);
 
         // ---- In chi tiết lời giải đã decode ----
         printSolution(bestSol, data);

@@ -1,400 +1,324 @@
-/**
- * @file pdp_tabu.cpp
- * @brief Tabu Search hoạt động trên Chromosome (vector<Gene>).
- *
- * applyMove() di chuyển nguyên khối Gene (mang theo resupply_vector).
- * TabuMove dựa trên chỉ số (i, j) — không phụ thuộc node_id → logic không đổi.
- *
- * Bridge sang evaluateWithCache: chrToIds() trích xuất node_id để dùng cache cũ.
- */
-
 #include "pdp_tabu.h"
+#include "pdp_ga.h"
 #include "pdp_fitness.h"
-#include "pdp_cache.h"
-#include <algorithm>
 #include <random>
+#include <unordered_map>
+#include <unordered_set>
+#include <string>
+#include <algorithm>
 #include <iostream>
-#include <limits>
-#include <cmath>
-#include <numeric>
+#include <climits>
 
 using namespace std;
 
-// ============================================================
-// === BRIDGE UTILITY =========================================
-// ============================================================
+namespace {
 
-/// Trích xuất vector<int> node_id từ Chromosome để dùng với evaluateWithCache
-static vector<int> chrToIds(const Chromosome& seq) {
-    vector<int> ids;
-    ids.reserve(seq.size());
-    for (const Gene& g : seq) ids.push_back(g.node_id);
-    return ids;
+struct Move {
+    enum Type { RELOCATE, SWAP } type;
+    int customer_i = -1;
+    int from_route_i = -1;
+    int from_pos_i = -1;
+    int to_route_i = -1;
+    int to_pos_i = -1;
+    
+    int customer_j = -1;
+    int from_route_j = -1;
+    int from_pos_j = -1;
+};
+
+double getPkgWeight(const PDPData& data, int p) {
+    if (p <= 0 || p >= (int)data.demands.size()) return 0.0;
+    return (double)data.demands[p];
 }
 
-/// Đánh giá Chromosome thông qua evaluateWithCache (dùng bridge)
-static PDPSolution evalChromosome(const Chromosome& seq,
-                                  const PDPData& data,
-                                  SolutionCache& cache) {
-    return evaluateWithCache(chrToIds(seq), data, cache);
+double getFitness(const SolutionEncoding& sol, const PDPData& data) {
+    PDPSolution decoded = decode_solution(sol, data, false);
+    return decoded.totalCost + decoded.totalPenalty;
 }
 
-// ============================================================
-// === TABUMOVE ===============================================
-// ============================================================
-
-string TabuMove::key() const {
-    return to_string(type) + "_" + to_string(i) + "_"
-         + to_string(j)    + "_" + to_string(param);
-}
-
-// ============================================================
-// === CONSTRUCTOR & WEIGHT MANAGEMENT ========================
-// ============================================================
-
-TabuSearchPDP::TabuSearchPDP(const PDPData& data, int maxIterations, SolutionCache& cache)
-    : data(data), maxIterations(maxIterations), cache(cache)
-{
-    int n = data.numCustomers;
-    tabuTenure = (int)(0.2 * n) + (rand() % 11);
-
-    weights  = vector<double>(6, 1.0);
-    scores   = vector<double>(6, 0.0);
-    usedCount = vector<int>(6, 0);
-}
-
-int TabuSearchPDP::selectMoveIndex() {
-    double total = 0.0;
-    for (double w : weights) total += w;
-    double rnd = ((double)rand() / RAND_MAX) * total;
-    double acc = 0.0;
-    for (int i = 0; i < (int)weights.size(); ++i) {
-        acc += weights[i];
-        if (rnd <= acc) return i;
-    }
-    return (int)weights.size() - 1;
-}
-
-void TabuSearchPDP::updateWeights(int /*segmentLength*/) {
-    const double delta4 = 0.5;
-    for (int i = 0; i < 6; ++i) {
-        if (usedCount[i] > 0)
-            weights[i] = (1 - delta4) * weights[i] + delta4 * (scores[i] / usedCount[i]);
-        scores[i]    = 0.0;
-        usedCount[i] = 0;
-    }
-}
-
-void TabuSearchPDP::addTabu(const TabuMove& move, int currentIter) {
-    tabuList[move.key()] = currentIter + tabuTenure;
-}
-
-bool TabuSearchPDP::isTabu(const TabuMove& move, int currentIter) const {
-    auto it = tabuList.find(move.key());
-    return (it != tabuList.end() && currentIter < it->second);
-}
-
-// ============================================================
-// === APPLY MOVE — di chuyển nguyên khối Gene ================
-// ============================================================
-
-Chromosome TabuSearchPDP::applyMove(const Chromosome& seq, const TabuMove& move) const {
-    Chromosome result = seq;
-
-    switch (move.type) {
-        case 0: // Swap
-            swap(result[move.i], result[move.j]);
-            break;
-
-        case 1: { // Insert: di chuyển Gene[i] đến vị trí j
-            Gene tmp = result[move.i];
-            result.erase(result.begin() + move.i);
-            int ins = move.j;
-            if (ins > move.i) ins--;       // đã erase 1 phần tử
-            ins = max(0, min(ins, (int)result.size()));
-            result.insert(result.begin() + ins, tmp);
-            break;
+SolutionEncoding applyMove(const SolutionEncoding& baseSol, const Move& move, const PDPData& data) {
+    // 1. Extract customer routes
+    vector<vector<int>> routes = extractCustomerRoutes(baseSol);
+    
+    // 2. Apply move
+    if (move.type == Move::RELOCATE) {
+        int from_route = move.from_route_i;
+        int to_route = move.to_route_i;
+        int from_pos = move.from_pos_i;
+        int to_pos = move.to_pos_i;
+        
+        if (from_route < 0 || from_route >= (int)routes.size() ||
+            to_route < 0 || to_route >= (int)routes.size() ||
+            from_pos < 0 || from_pos >= (int)routes[from_route].size()) {
+            return baseSol;
         }
-
-        case 2:   // 2-opt: reverse segment [i, j]
-        case 3: { // 2-opt*: same reversal logic
-            if (move.i < move.j)
-                reverse(result.begin() + move.i, result.begin() + move.j + 1);
-            break;
+        
+        int val = routes[from_route][from_pos];
+        routes[from_route].erase(routes[from_route].begin() + from_pos);
+        
+        int adjusted_to_pos = to_pos;
+        if (from_route == to_route && to_pos > from_pos) {
+            adjusted_to_pos--;
         }
+        
+        if (adjusted_to_pos < 0 || adjusted_to_pos > (int)routes[to_route].size()) {
+            return baseSol;
+        }
+        routes[to_route].insert(routes[to_route].begin() + adjusted_to_pos, val);
+    } else { // SWAP
+        if (move.from_route_i < 0 || move.from_route_i >= (int)routes.size() ||
+            move.from_pos_i < 0 || move.from_pos_i >= (int)routes[move.from_route_i].size() ||
+            move.from_route_j < 0 || move.from_route_j >= (int)routes.size() ||
+            move.from_pos_j < 0 || move.from_pos_j >= (int)routes[move.from_route_j].size()) {
+            return baseSol;
+        }
+        swap(routes[move.from_route_i][move.from_pos_i], routes[move.from_route_j][move.from_pos_j]);
+    }
+    
+    // Repair C2 pairing on the customer routes before rebuilding empty routes
+    repairC2Pairs(routes, data);
 
-        case 4: { // Or-opt: relocate block of size param
-            int blockSize = move.param;
-            if (move.i + blockSize <= (int)result.size()) {
-                Chromosome block(result.begin() + move.i,
-                                 result.begin() + move.i + blockSize);
-                result.erase(result.begin() + move.i,
-                             result.begin() + move.i + blockSize);
-                int ins = move.j > move.i ? move.j - blockSize : move.j;
-                ins = max(0, min(ins, (int)result.size()));
-                result.insert(result.begin() + ins, block.begin(), block.end());
+    // 3. Initialize empty encoded routes
+    SolutionEncoding child = initializeEmptyEncodedRoutes(routes);
+    
+    // 4. Extract and inherit resupply candidates from baseSol
+    vector<Trip> candidates = extractResupplyTrips(baseSol, 1);
+    
+    // Sort candidates: prefer larger trips first
+    sort(candidates.begin(), candidates.end(), [](const Trip& a, const Trip& b) {
+        return a.pkgs.size() > b.pkgs.size();
+    });
+    
+    unordered_set<int> supplied;
+    auto childIndex = buildCustomerIndex(child);
+    const double QD = (double)data.getDroneCapacity();
+
+    for (const auto& trip : candidates) {
+        vector<int> valid = getValidPackageSubset(trip, childIndex, supplied);
+        // Exclude C2 Pickup/Delivery packages from drone resupply
+        vector<int> filteredValid;
+        for (int p : valid) {
+            if (p > 0 && p < (int)data.nodeTypes.size() && (data.nodeTypes[p] == "P" || data.nodeTypes[p] == "DL")) {
+                continue;
             }
-            break;
+            filteredValid.push_back(p);
         }
+        valid.swap(filteredValid);
+        if (valid.empty()) continue;
 
-        case 5: { // Relocate pair: move Gene[i] and Gene[i+1]
-            if (move.i + 1 < (int)result.size()) {
-                Gene g1 = result[move.i];
-                Gene g2 = result[move.i + 1];
-                result.erase(result.begin() + move.i,
-                             result.begin() + move.i + 2);
-                int ins = move.j > move.i ? move.j - 2 : move.j;
-                ins = max(0, min(ins, (int)result.size()));
-                result.insert(result.begin() + ins, g2);
-                result.insert(result.begin() + ins, g1);
+        double load = 0.0;
+        for (int p : valid) load += getPkgWeight(data, p);
+        if (load > QD + 1e-9) continue;
+
+        auto itH = childIndex.find(trip.h);
+        if (itH == childIndex.end()) continue;
+        Route& r = child[itH->second.route_id];
+
+        for (auto& st : r) {
+            if (st.node == trip.h) {
+                st.packages.insert(st.packages.end(), valid.begin(), valid.end());
+                break;
             }
-            break;
         }
+        for (int p : valid) supplied.insert(p);
     }
-    return result;
+    
+    // 5. Repair
+    repairSolution(child, data);
+    
+    return child;
 }
 
-// ============================================================
-// === MOVE GENERATION FUNCTIONS ==============================
-// ============================================================
+vector<Move> generateCandidateMoves(const SolutionEncoding& baseSol, int maxCandidates, mt19937& rng) {
+    vector<Move> candidates;
+    vector<vector<int>> routes = extractCustomerRoutes(baseSol);
+    
+    int numTrucks = (int)routes.size();
+    if (numTrucks == 0) return candidates;
+    
+    int totalCustomers = 0;
+    for (const auto& r : routes) totalCustomers += r.size();
+    if (totalCustomers == 0) return candidates;
+    
+    unordered_set<string> seen;
+    int maxAttempts = maxCandidates * 5;
+    int attempts = 0;
+    
+    uniform_int_distribution<int> typeDist(0, 1); // 0 = Relocate, 1 = Swap
+    uniform_int_distribution<int> truckDist(0, numTrucks - 1);
+    
+    while ((int)candidates.size() < maxCandidates && attempts < maxAttempts) {
+        attempts++;
+        int mType = typeDist(rng);
+        
+        if (mType == 0) { // RELOCATE
+            int r1 = truckDist(rng);
+            if (routes[r1].empty()) continue;
+            
+            uniform_int_distribution<int> pos1Dist(0, (int)routes[r1].size() - 1);
+            int p1 = pos1Dist(rng);
+            int cust = routes[r1][p1];
+            
+            int r2 = truckDist(rng);
+            uniform_int_distribution<int> pos2Dist(0, (int)routes[r2].size());
+            int p2 = pos2Dist(rng);
+            
+            if (r1 == r2 && (p2 == p1 || p2 == p1 + 1)) continue;
+            
+            string key = "R:" + to_string(cust) + ":" + to_string(r2) + ":" + to_string(p2);
+            if (seen.count(key)) continue;
+            seen.insert(key);
+            
+            Move mv;
+            mv.type = Move::RELOCATE;
+            mv.customer_i = cust;
+            mv.from_route_i = r1;
+            mv.from_pos_i = p1;
+            mv.to_route_i = r2;
+            mv.to_pos_i = p2;
+            candidates.push_back(mv);
+            
+        } else { // SWAP
+            int r1 = truckDist(rng);
+            if (routes[r1].empty()) continue;
+            
+            uniform_int_distribution<int> pos1Dist(0, (int)routes[r1].size() - 1);
+            int p1 = pos1Dist(rng);
+            int cust1 = routes[r1][p1];
+            
+            int r2 = truckDist(rng);
+            if (routes[r2].empty()) continue;
+            
+            uniform_int_distribution<int> pos2Dist(0, (int)routes[r2].size() - 1);
+            int p2 = pos2Dist(rng);
+            int cust2 = routes[r2][p2];
+            
+            if (r1 == r2 && p1 == p2) continue;
+            
+            int minCust = min(cust1, cust2);
+            int maxCust = max(cust1, cust2);
+            string key = "S:" + to_string(minCust) + ":" + to_string(maxCust);
+            if (seen.count(key)) continue;
+            seen.insert(key);
+            
+            Move mv;
+            mv.type = Move::SWAP;
+            mv.customer_i = cust1;
+            mv.from_route_i = r1;
+            mv.from_pos_i = p1;
+            mv.to_route_i = r2;
+            mv.to_pos_i = p2;
+            
+            mv.customer_j = cust2;
+            mv.from_route_j = r2;
+            mv.from_pos_j = p2;
+            
+            candidates.push_back(mv);
+        }
+    }
+    
+    return candidates;
+}
 
-bool TabuSearchPDP::findBestSwapMove(
-    const Chromosome& cur, double curCost, double bestCost,
-    int iter, TabuMove& bestMove, Chromosome& bestCand, double& bestDelta)
-{
-    bool found = false;
-    for (int i = 0; i < (int)cur.size(); ++i) {
-        for (int j = i + 1; j < (int)cur.size(); ++j) {
-            TabuMove move{0, i, j, 0};
-            bool tabu = isTabu(move, iter);
-            Chromosome cand = applyMove(cur, move);
-            PDPSolution sol  = evalChromosome(cand, data, cache);
-            double cost      = sol.totalCost + sol.totalPenalty;
-            double delta     = cost - curCost;
-            if (!tabu || cost < bestCost) {
-                if (delta < bestDelta) {
-                    bestDelta = delta; bestMove = move; bestCand = cand; found = true;
+} // namespace
+
+TabuSearchPDP::TabuSearchPDP(const PDPData& data, int maxIterations, double globalBestFitness, int tabuTenure)
+    : data(data), maxIterations(maxIterations), globalBestFitness(globalBestFitness), tabuTenure(tabuTenure) {}
+
+SolutionEncoding TabuSearchPDP::run(const SolutionEncoding& initial) {
+    SolutionEncoding current = initial;
+    SolutionEncoding bestLocal = initial;
+    
+    double fitnessCurrent = getFitness(current, data);
+    double fitnessBestLocal = fitnessCurrent;
+    
+    // Tabu list maps "customer,route" -> step_until_tabu_expires
+    unordered_map<string, int> tabuList;
+    
+    mt19937 rng(42);
+    int maxCandidates = 150;
+    
+    for (int step = 0; step < maxIterations; ++step) {
+        vector<Move> neighborhood = generateCandidateMoves(current, maxCandidates, rng);
+        if (neighborhood.empty()) break;
+        
+        SolutionEncoding bestCandidate;
+        double fitnessBestCandidate = numeric_limits<double>::infinity();
+        Move bestMove;
+        bool foundValidCandidate = false;
+        
+        for (const auto& mv : neighborhood) {
+            SolutionEncoding neighbor = applyMove(current, mv, data);
+            double fitnessNeighbor = getFitness(neighbor, data);
+            
+            bool isTabu = false;
+            if (mv.type == Move::RELOCATE) {
+                string key = to_string(mv.customer_i) + "," + to_string(mv.to_route_i);
+                auto it = tabuList.find(key);
+                isTabu = (it != tabuList.end() && it->second > step);
+            } else { // SWAP
+                string key_i = to_string(mv.customer_i) + "," + to_string(mv.to_route_i);
+                string key_j = to_string(mv.customer_j) + "," + to_string(mv.from_route_i);
+                
+                auto it_i = tabuList.find(key_i);
+                bool tabu_i = (it_i != tabuList.end() && it_i->second > step);
+                
+                auto it_j = tabuList.find(key_j);
+                bool tabu_j = (it_j != tabuList.end() && it_j->second > step);
+                
+                isTabu = tabu_i || tabu_j;
+            }
+            
+            bool isAspiration = (fitnessNeighbor < globalBestFitness - 1e-5);
+            
+            if (!isTabu || isAspiration) {
+                if (!foundValidCandidate || fitnessNeighbor < fitnessBestCandidate) {
+                    bestCandidate = neighbor;
+                    fitnessBestCandidate = fitnessNeighbor;
+                    bestMove = mv;
+                    foundValidCandidate = true;
                 }
             }
         }
-    }
-    return found;
-}
-
-bool TabuSearchPDP::findBestInsertMove(
-    const Chromosome& cur, double curCost, double bestCost,
-    int iter, TabuMove& bestMove, Chromosome& bestCand, double& bestDelta)
-{
-    bool found = false;
-    int n = (int)cur.size();
-    int maxTrials = min(50, n * n / 4);
-
-    mt19937 gen(random_device{}());
-    uniform_int_distribution<int> dist(0, n - 1);
-
-    for (int t = 0; t < maxTrials; ++t) {
-        int i = dist(gen), j = dist(gen);
-        if (i == j) continue;
-        TabuMove move{1, i, j, 0};
-        bool tabu = isTabu(move, iter);
-        Chromosome cand = applyMove(cur, move);
-        PDPSolution sol  = evalChromosome(cand, data, cache);
-        double cost      = sol.totalCost + sol.totalPenalty;
-        double delta     = cost - curCost;
-        if (!tabu || cost < bestCost) {
-            if (delta < bestDelta) {
-                bestDelta = delta; bestMove = move; bestCand = cand; found = true;
-            }
+        
+        if (!foundValidCandidate) {
+            break;
         }
-    }
-    return found;
-}
-
-bool TabuSearchPDP::findBest2OptMove(
-    const Chromosome& cur, double curCost, double bestCost,
-    int iter, TabuMove& bestMove, Chromosome& bestCand, double& bestDelta)
-{
-    bool found = false;
-    int n = (int)cur.size();
-    for (int i = 0; i < n - 1; ++i) {
-        for (int j = i + 1; j < min(n, i + 20); ++j) {
-            TabuMove move{2, i, j, 0};
-            bool tabu = isTabu(move, iter);
-            Chromosome cand = applyMove(cur, move);
-            PDPSolution sol  = evalChromosome(cand, data, cache);
-            double cost      = sol.totalCost + sol.totalPenalty;
-            double delta     = cost - curCost;
-            if (!tabu || cost < bestCost) {
-                if (delta < bestDelta) {
-                    bestDelta = delta; bestMove = move; bestCand = cand; found = true;
-                }
-            }
+        
+        current = bestCandidate;
+        fitnessCurrent = fitnessBestCandidate;
+        
+        if (fitnessCurrent < fitnessBestLocal - 1e-5) {
+            bestLocal = current;
+            fitnessBestLocal = fitnessCurrent;
         }
-    }
-    return found;
-}
-
-bool TabuSearchPDP::findBest2OptStarMove(
-    const Chromosome& cur, double curCost, double bestCost,
-    int iter, TabuMove& bestMove, Chromosome& bestCand, double& bestDelta)
-{
-    bool found = false;
-    int n = (int)cur.size();
-    for (int i = 0; i < n - 2; ++i) {
-        for (int j = i + 2; j < min(n, i + 15); ++j) {
-            TabuMove move{3, i, j, 0};
-            bool tabu = isTabu(move, iter);
-            Chromosome cand = applyMove(cur, move);
-            PDPSolution sol  = evalChromosome(cand, data, cache);
-            double cost      = sol.totalCost + sol.totalPenalty;
-            double delta     = cost - curCost;
-            if (!tabu || cost < bestCost) {
-                if (delta < bestDelta) {
-                    bestDelta = delta; bestMove = move; bestCand = cand; found = true;
-                }
-            }
+        
+        // Randomize L in [5,10] if tabuTenure matches this range (default 7)
+        int tenure = tabuTenure;
+        if (tabuTenure >= 5 && tabuTenure <= 10) {
+            uniform_int_distribution<int> tenureDist(5, 10);
+            tenure = tenureDist(rng);
         }
-    }
-    return found;
-}
-
-bool TabuSearchPDP::findBestOrOptMove(
-    const Chromosome& cur, double curCost, double bestCost,
-    int iter, TabuMove& bestMove, Chromosome& bestCand, double& bestDelta)
-{
-    bool found = false;
-    int n = (int)cur.size();
-    for (int bs = 1; bs <= 3; ++bs) {
-        if (n < bs + 1) continue;
-        for (int i = 0; i <= n - bs; ++i) {
-            for (int j = 0; j <= n - bs; ++j) {
-                if (abs(i - j) < bs) continue;
-                TabuMove move{4, i, j, bs};
-                bool tabu = isTabu(move, iter);
-                Chromosome cand = applyMove(cur, move);
-                PDPSolution sol  = evalChromosome(cand, data, cache);
-                double cost      = sol.totalCost + sol.totalPenalty;
-                double delta     = cost - curCost;
-                if (!tabu || cost < bestCost) {
-                    if (delta < bestDelta) {
-                        bestDelta = delta; bestMove = move; bestCand = cand; found = true;
-                    }
-                }
-            }
-        }
-    }
-    return found;
-}
-
-bool TabuSearchPDP::findBestRelocatePairMove(
-    const Chromosome& cur, double curCost, double bestCost,
-    int iter, TabuMove& bestMove, Chromosome& bestCand, double& bestDelta)
-{
-    bool found = false;
-    int n = (int)cur.size();
-    if (n < 3) return false;
-    for (int i = 0; i < n - 1; ++i) {
-        for (int j = 0; j <= n - 2; ++j) {
-            if (abs(i - j) < 2) continue;
-            TabuMove move{5, i, j, 0};
-            bool tabu = isTabu(move, iter);
-            Chromosome cand = applyMove(cur, move);
-            PDPSolution sol  = evalChromosome(cand, data, cache);
-            double cost      = sol.totalCost + sol.totalPenalty;
-            double delta     = cost - curCost;
-            if (!tabu || cost < bestCost) {
-                if (delta < bestDelta) {
-                    bestDelta = delta; bestMove = move; bestCand = cand; found = true;
-                }
-            }
-        }
-    }
-    return found;
-}
-
-// ============================================================
-// === MAIN TABU SEARCH =======================================
-// ============================================================
-
-Chromosome TabuSearchPDP::run(const Chromosome& initialSeq) {
-    Chromosome currentSeq = initialSeq;
-    Chromosome bestSeq    = initialSeq;
-
-    PDPSolution currentSol = evalChromosome(currentSeq, data, cache);
-    PDPSolution bestSol    = currentSol;
-    double currentCost     = currentSol.totalCost + currentSol.totalPenalty;
-    double bestCost        = currentCost;
-
-    const double delta1 = 0.5, delta2 = 0.3, delta3 = 0.2;
-    int segmentLength  = 100;
-    int noImprovement  = 0;
-    const int maxNoImp = min(5000, maxIterations / 2);
-
-    for (int iter = 0; iter < maxIterations; ++iter) {
-        int moveIndex = selectMoveIndex();
-
-        TabuMove   bestMove{-1, -1, -1, 0};
-        Chromosome bestCand;
-        double     bestDelta = numeric_limits<double>::infinity();
-        bool       found     = false;
-
-        switch (moveIndex) {
-            case 0: found = findBestSwapMove        (currentSeq, currentCost, bestCost, iter, bestMove, bestCand, bestDelta); break;
-            case 1: found = findBestInsertMove       (currentSeq, currentCost, bestCost, iter, bestMove, bestCand, bestDelta); break;
-            case 2: found = findBest2OptMove         (currentSeq, currentCost, bestCost, iter, bestMove, bestCand, bestDelta); break;
-            case 3: found = findBest2OptStarMove     (currentSeq, currentCost, bestCost, iter, bestMove, bestCand, bestDelta); break;
-            case 4: found = findBestOrOptMove        (currentSeq, currentCost, bestCost, iter, bestMove, bestCand, bestDelta); break;
-            case 5: found = findBestRelocatePairMove (currentSeq, currentCost, bestCost, iter, bestMove, bestCand, bestDelta); break;
-        }
-
-        if (found && bestMove.type != -1) {
-            double prevCost = currentCost;
-            currentSeq = bestCand;
-
-            PDPSolution newSol = evalChromosome(currentSeq, data, cache);
-            currentCost = newSol.totalCost + newSol.totalPenalty;
-            currentSol  = newSol;
-
-            if (currentCost < bestCost) {
-                scores[moveIndex] += delta1;
-                bestCost = currentCost; bestSeq = currentSeq; bestSol = newSol;
-                noImprovement = 0;
-            } else if (currentCost < prevCost) {
-                scores[moveIndex] += delta2;
-                noImprovement++;
-            } else {
-                scores[moveIndex] += delta3;
-                noImprovement++;
-            }
-            usedCount[moveIndex]++;
-            addTabu(bestMove, iter);
+        
+        if (bestMove.type == Move::RELOCATE) {
+            string reverseKey = to_string(bestMove.customer_i) + "," + to_string(bestMove.from_route_i);
+            tabuList[reverseKey] = step + tenure;
         } else {
-            noImprovement++;
+            string reverseKey_i = to_string(bestMove.customer_i) + "," + to_string(bestMove.from_route_i);
+            string reverseKey_j = to_string(bestMove.customer_j) + "," + to_string(bestMove.from_route_j);
+            tabuList[reverseKey_i] = step + tenure;
+            tabuList[reverseKey_j] = step + tenure;
         }
-
-        if ((iter + 1) % segmentLength == 0)
-            updateWeights(segmentLength);
-
-        if (noImprovement >= maxNoImp) break;
-
-        if (iter % 50 == 0 && iter > 0)
-            cout << "  Tabu iter " << iter
-                 << ": best=" << bestCost
-                 << " current=" << currentCost << "\n";
     }
-
-    return bestSeq;
+    
+    return bestLocal;
 }
 
-// ============================================================
-// === SIMPLE INTERFACE =======================================
-// ============================================================
-
-Chromosome tabuSearchPDP(const Chromosome& initialSeq,
-                         const PDPData& data,
-                         int maxIterations,
-                         SolutionCache& cache)
-{
-    TabuSearchPDP tabu(data, maxIterations, cache);
-    return tabu.run(initialSeq);
+SolutionEncoding tabuSearchPDP(const SolutionEncoding& initial,
+                               const PDPData& data,
+                               int maxIterations,
+                               double globalBestFitness,
+                               int tabuTenure) {
+    TabuSearchPDP ts(data, maxIterations, globalBestFitness, tabuTenure);
+    return ts.run(initial);
 }
