@@ -17,6 +17,7 @@
 #include <string>
 
 #include "pdp_ga.h" // geneticAlgorithmPDP (MD encoding)
+#include "pdp_init.h" // initStructuredPopulationPDP
 #include "pdp_reader.h"
 #include "pdp_types.h"
 #include "pdp_utils.h"      // printSolution, printEncodedSolution
@@ -165,10 +166,13 @@ int main(int argc, char *argv[]) {
   }
 
   // ---- Run GA ----
-  PDPSolution solution =
-      geneticAlgorithmPDP(data, populationSize, maxGenerations, mutationRate,
-                runNumber, isSmallScale,
-                logEnabled ? (std::ostream*)&logFile : nullptr);
+    vector<SolutionEncoding> initPopulation =
+      initStructuredPopulationPDP(populationSize, data, runNumber);
+    PDPSolution solution =
+      geneticAlgorithmPDP(data, initPopulation,
+          populationSize, maxGenerations, mutationRate,
+          runNumber, isSmallScale,
+          logEnabled ? (std::ostream*)&logFile : nullptr);
 
   double costGA = solution.totalCost;
 

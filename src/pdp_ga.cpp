@@ -1,7 +1,6 @@
 #include "pdp_ga.h"
 
 #include "pdp_fitness.h"
-#include "pdp_init.h"
 #include "pdp_tabu.h"
 
 #include <algorithm>
@@ -750,6 +749,7 @@ static SolutionEncoding tournamentSelection(const vector<SolutionEncoding>& pop,
 // } // namespace
 
 PDPSolution geneticAlgorithmPDP(const PDPData& data,
+                                const std::vector<SolutionEncoding>& initialPopulation,
                                 int populationSize,
                                 int maxGenerations,
                                 double mutationRate,
@@ -760,8 +760,16 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data,
     (void)isSmallScale;
     if (logEvery <= 0) logEvery = 1;
 
-    // Init population
-    vector<SolutionEncoding> population = initStructuredPopulationPDP(populationSize, data, runNumber);
+    // Init population is provided by caller (pdp_init)
+    vector<SolutionEncoding> population = initialPopulation;
+    if (population.empty()) {
+        PDPSolution empty;
+        empty.totalCost = numeric_limits<double>::infinity();
+        empty.totalPenalty = numeric_limits<double>::infinity();
+        empty.isFeasible = false;
+        return empty;
+    }
+    populationSize = (int)population.size();
 
     std::seed_seq seed{runNumber, populationSize, maxGenerations, data.numNodes};
     mt19937 gen(seed);

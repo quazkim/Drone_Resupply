@@ -33,6 +33,7 @@ void repairC2Pairs(std::vector<std::vector<int>>& routes, const PDPData& data);
  * Returns the best decoded solution found; the encoded solution is in PDPSolution.encoded_routes.
  */
 PDPSolution geneticAlgorithmPDP(const PDPData& data,
+                                const std::vector<SolutionEncoding>& initialPopulation,
                                 int populationSize,
                                 int maxGenerations,
                                 double mutationRate,
