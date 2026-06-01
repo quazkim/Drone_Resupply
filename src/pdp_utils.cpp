@@ -11,6 +11,29 @@
 
 using namespace std;
 
+double computeLowerBound(const PDPData& data) {
+    double lb = 0.0;
+    const int depot = data.depotIndex;
+    for (int i = 1; i < data.numNodes; ++i) {
+        if (!data.isCustomer(i)) continue;
+        if (i < (int)data.nodeTypes.size() && data.nodeTypes[i] != "D") continue;
+
+        const double ri       = (double)data.readyTimes[i];
+        const double droneTo  = data.droneDistMatrix[depot][i];
+        const double truckTo  = data.truckDistMatrix[depot][i];
+        const double truckBack= data.truckDistMatrix[i][depot];
+        const double svc      = data.truckServiceTime;
+
+        // Option A: drone resupplies truck at node i
+        double droneOption = max(truckTo, ri + droneTo) + data.resupplyTime + svc + truckBack;
+        // Option B: truck carries package from depot (waits until r_i)
+        double truckCarry  = ri + truckTo + svc + truckBack;
+
+        lb = max(lb, min(droneOption, truckCarry));
+    }
+    return lb;
+}
+
 double euclideanDistance(double x1, double y1, double x2, double y2) {
     double dx = x1 - x2;
     double dy = y1 - y2;

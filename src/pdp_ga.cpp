@@ -1,12 +1,18 @@
 #include "pdp_ga.h"
 
 #include "pdp_fitness.h"
+#include "pdp_init.h"
 #include "pdp_tabu.h"
+#include "pdp_utils.h"
 
 #include <algorithm>
+#include <chrono>
 #include <climits>
+#include <iomanip>
+#include <iostream>
 #include <numeric>
 #include <random>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -756,9 +762,13 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data,
                                 int runNumber,
                                 bool isSmallScale,
                                 std::ostream* logStream,
-                                int logEvery) {
+                                int logEvery,
+                                double timeLimitSeconds) {
     (void)isSmallScale;
     if (logEvery <= 0) logEvery = 1;
+
+    const auto gaStartTime = chrono::high_resolution_clock::now();
+    const double lowerBound = computeLowerBound(data);
 
     // Init population is provided by caller (pdp_init)
     vector<SolutionEncoding> population = initialPopulation;
@@ -824,6 +834,32 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data,
     vector<double> fitness;
     PopStats initStats = evaluatePopulation(population, fitness);
 
+    // Header
+    cout << "\n[GA] pop=" << populationSize
+         << " maxGen=" << maxGenerations
+         << " mut=" << mutationRate
+         << " customers=" << data.numCustomers
+         << " trucks=" << data.numTrucks
+         << " drones=" << data.numDrones << "\n"
+         << "[GA] LowerBound=" << fixed << setprecision(2) << lowerBound
+         << (timeLimitSeconds > 0 ? ("  TimeLimit=" + to_string((int)timeLimitSeconds) + "s") : "  TimeLimit=none") << "\n"
+         << "[GA] Init  | Feasible=" << initStats.feasibleCount << "/" << populationSize
+         << " | BestCmax=" << fixed << setprecision(2) << initStats.bestCost
+         << " | BestPenalty=" << initStats.bestPenalty
+         << " | AvgFit=" << initStats.avgFitness << "\n"
+         << string(90, '-') << "\n";
+    cout << setw(6)  << "Gen"
+         << setw(10) << "BestCmax"
+         << setw(10) << "Penalty"
+         << setw(12) << "Feasible"
+         << setw(10) << "AvgFit"
+         << setw(8)  << "Stag"
+         << setw(8)  << "MutC"
+         << setw(8)  << "MutD"
+         << "  Note\n"
+         << string(90, '-') << "\n";
+    cout.flush();
+
     if (logStream) {
         (*logStream) << "[GA] start pop=" << populationSize
                      << " gen=" << maxGenerations
@@ -841,6 +877,8 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data,
 
     const int tournamentSize = 5;
     const int eliteCount = 1;
+    int consecutiveTSFails = 0;
+    int restartSeed = runNumber * 100;
 
     for (int genIdx = 0; genIdx < maxGenerations; ++genIdx) {
         int madeChildren = 0;
@@ -919,6 +957,7 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data,
         }
 
         // Trigger Tabu Search on stagnation (10% of maxGenerations)
+        bool tsTriggered = false;
         if (stagnation_counter >= (int)(0.1 * maxGenerations)) {
             int K = max(1, (int)(0.1 * population.size()));
             vector<pair<double, int>> indexedFitness(population.size());
@@ -927,9 +966,18 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data,
             }
             sort(indexedFitness.begin(), indexedFitness.end());
 
+            const double bestCostBeforeTS = best.totalCost;
+            const bool feasibleBeforeTS   = best.isFeasible;
+
+            cout << "[TS] gen=" << genIdx
+                 << " stagnant=" << stagnation_counter
+                 << " consecutiveFails=" << consecutiveTSFails
+                 << " → running TS on " << K << " elites...\n";
+            cout.flush();
+
             if (logStream) {
-                (*logStream) << "[GA-TS] Stagnation reached at gen=" << genIdx 
-                             << " (" << stagnation_counter << " gens stagnant). Running TS on " 
+                (*logStream) << "[GA-TS] Stagnation reached at gen=" << genIdx
+                             << " (" << stagnation_counter << " gens stagnant). Running TS on "
                              << K << " elite individuals...\n";
             }
 
@@ -941,16 +989,85 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data,
             }
 
             stagnation_counter = 0;
+            tsTriggered = true;
 
             // Re-evaluate population after Tabu Search updates
             genStats = evaluatePopulation(population, fitness);
 
+            // Track consecutive TS failures (no improvement)
+            const bool tsImproved = (best.isFeasible && (!feasibleBeforeTS ||
+                                      best.totalCost < bestCostBeforeTS - 0.5));
+            if (tsImproved) {
+                consecutiveTSFails = 0;
+            } else {
+                consecutiveTSFails++;
+            }
+
+            cout << "[TS] done → BestCmax=" << fixed << setprecision(2) << best.totalCost
+                 << " Penalty=" << best.totalPenalty
+                 << " Feasible=" << (best.isFeasible ? "YES" : "NO")
+                 << (tsImproved ? " *IMPROVED*" : " (no improvement)") << "\n";
+            cout.flush();
+
             if (logStream) {
-                (*logStream) << "[GA-TS] TS complete. New global best Cmax=" << best.totalCost 
-                             << " Penalty=" << best.totalPenalty 
-                             << " Feasible=" << (best.isFeasible ? 1 : 0) << "\n";
+                (*logStream) << "[GA-TS] TS complete. New global best Cmax=" << best.totalCost
+                             << " Penalty=" << best.totalPenalty
+                             << " Feasible=" << (best.isFeasible ? 1 : 0)
+                             << " improved=" << (tsImproved ? 1 : 0) << "\n";
+            }
+
+            // --- RESTART: after 3 consecutive TS failures, diversify population ---
+            if (consecutiveTSFails >= 3) {
+                const int keepCount  = max(1, populationSize / 10);
+                const int freshCount = populationSize - keepCount;
+
+                // Sort population by fitness, keep top keepCount
+                vector<SolutionEncoding> newPop;
+                newPop.reserve(populationSize);
+                for (int i = 0; i < keepCount; ++i)
+                    newPop.push_back(population[indexedFitness[i].second]);
+                // Always ensure global best is in elite
+                newPop[0] = best.encoded_routes;
+
+                // Inject fresh random individuals
+                auto freshInds = initStructuredPopulationPDP(freshCount, data, ++restartSeed);
+                for (auto& ind : freshInds) newPop.push_back(std::move(ind));
+
+                population.swap(newPop);
+                consecutiveTSFails = 0;
+
+                // Re-evaluate after restart
+                genStats = evaluatePopulation(population, fitness);
+
+                cout << "[RESTART] gen=" << genIdx
+                     << " kept=" << keepCount << " fresh=" << freshCount
+                     << " seed=" << restartSeed << "\n";
+                cout.flush();
+                if (logStream)
+                    (*logStream) << "[GA] RESTART gen=" << genIdx
+                                 << " kept=" << keepCount << " fresh=" << freshCount << "\n";
             }
         }
+
+        // Per-gen stdout log (every gen)
+        {
+            string note;
+            if (tsTriggered)  note += "[TS]";
+            if (improved)     note += " *IMPROVED*";
+            if (best.isFeasible && improved) note += " [FEASIBLE]";
+
+            cout << setw(6)  << genIdx
+                 << setw(10) << fixed << setprecision(2) << best.totalCost
+                 << setw(10) << fixed << setprecision(2) << best.totalPenalty
+                 << setw(8)  << genStats.feasibleCount << "/" << left << setw(4) << populationSize
+                 << setw(10) << fixed << setprecision(2) << right << genStats.avgFitness
+                 << setw(8)  << stagnation_counter
+                 << setw(8)  << customerMutationCount
+                 << setw(8)  << droneMutationCount
+                 << "  " << note << "\n";
+            cout.flush();
+        }
+
         if (logStream && (genIdx % logEvery == 0 || genIdx + 1 == maxGenerations)) {
             (*logStream) << "[GA] gen=" << genIdx
                          << " feasible=" << genStats.feasibleCount << "/" << population.size()
@@ -966,6 +1083,34 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data,
                          << " globalBestPenalty=" << best.totalPenalty
                          << " globalBestFeasible=" << (best.isFeasible ? 1 : 0)
                          << "\n";
+        }
+
+        // --- Early stopping ---
+        const double elapsed = chrono::duration<double>(
+            chrono::high_resolution_clock::now() - gaStartTime).count();
+
+        if (best.isFeasible && best.totalCost <= lowerBound + 0.5) {
+            cout << "\n[GA] *** OPTIMAL (LB reached) ***"
+                 << "  Cmax=" << fixed << setprecision(2) << best.totalCost
+                 << "  LB=" << lowerBound
+                 << "  gen=" << genIdx
+                 << "  elapsed=" << setprecision(2) << elapsed << "s\n";
+            if (logStream)
+                (*logStream) << "[GA] STOP early: LB reached. Cmax=" << best.totalCost
+                             << " LB=" << lowerBound << " gen=" << genIdx << "\n";
+            break;
+        }
+
+        if (timeLimitSeconds > 0.0 && elapsed >= timeLimitSeconds) {
+            cout << "\n[GA] *** TIME LIMIT reached ***"
+                 << "  elapsed=" << fixed << setprecision(2) << elapsed << "s"
+                 << "  limit=" << setprecision(0) << timeLimitSeconds << "s"
+                 << "  gen=" << genIdx
+                 << "  Cmax=" << setprecision(2) << best.totalCost << "\n";
+            if (logStream)
+                (*logStream) << "[GA] STOP early: time limit. elapsed=" << elapsed
+                             << "s gen=" << genIdx << " Cmax=" << best.totalCost << "\n";
+            break;
         }
     }
 

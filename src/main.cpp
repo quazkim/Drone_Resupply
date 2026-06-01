@@ -60,6 +60,8 @@ int main(int argc, char *argv[]) {
     string logPath;
     bool logEnabled = false;
     ofstream logFile;
+    double timeLimitSeconds = -1.0;
+    bool timeLimitSet = false;
 
   // Parse --depot MODE
   int depotMode = 0;
@@ -99,6 +101,13 @@ int main(int argc, char *argv[]) {
       } else if (string(argv[i]) == "--log" && i + 1 < argc) {
         logPath = argv[++i];
         logEnabled = true;
+      } else if (string(argv[i]) == "--time" && i + 1 < argc) {
+        istringstream ss(argv[++i]);
+        if (!(ss >> timeLimitSeconds) || timeLimitSeconds <= 0) {
+          cerr << "Error: --time must be a positive number (seconds)\n";
+          return 1;
+        }
+        timeLimitSet = true;
       } else {
         cerr << "Error: Unknown or incomplete argument: " << argv[i] << "\n"
              << "Supported options:\n"
@@ -165,6 +174,13 @@ int main(int argc, char *argv[]) {
          << " run=" << runNumber << "\n";
   }
 
+  // ---- Auto time limit (matches paper: 2.5 min for n<=20, 60 min for n>20) ----
+  if (!timeLimitSet) {
+    timeLimitSeconds = (isSmallScale) ? 150.0 : 3600.0;
+  }
+  cout << "[TIME LIMIT] " << fixed << setprecision(1) << timeLimitSeconds << " seconds"
+       << (timeLimitSet ? " (manual)" : " (auto)") << "\n";
+
   // ---- Run GA ----
     vector<SolutionEncoding> initPopulation =
       initStructuredPopulationPDP(populationSize, data, runNumber);
@@ -172,7 +188,9 @@ int main(int argc, char *argv[]) {
       geneticAlgorithmPDP(data, initPopulation,
           populationSize, maxGenerations, mutationRate,
           runNumber, isSmallScale,
-          logEnabled ? (std::ostream*)&logFile : nullptr);
+          logEnabled ? (std::ostream*)&logFile : nullptr,
+          /*logEvery=*/1,
+          timeLimitSeconds);
 
   double costGA = solution.totalCost;
 

@@ -40,7 +40,8 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data,
                                 int runNumber,
                                 bool isSmallScale = false,
                                 std::ostream* logStream = nullptr,
-                                int logEvery = 1);
+                                int logEvery = 1,
+                                double timeLimitSeconds = -1.0);
 
 #endif // PDP_GA_H
 
