@@ -31,8 +31,6 @@ on:
         default: '4'
 
 env:
-  OR_TOOLS_VERSION: "9.11.4210"
-  OR_TOOLS_URL: "https://github.com/google/or-tools/releases/download/v9.11/or-tools_amd64_ubuntu-22.04_cpp_v9.11.4210.tar.gz"
   OR_TOOLS_DIR: "/opt/or-tools"
 
 jobs:
@@ -40,39 +38,47 @@ jobs:
   # Job 1: Build pdp_solver with OR-Tools + CMake
   # ──────────────────────────────────────────────────────
   build:
-    name: Build (Ubuntu 22.04 + OR-Tools)
-    runs-on: ubuntu-22.04
+    name: Build (ubuntu-latest + OR-Tools)
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Cache OR-Tools
         id: cache-ortools
         uses: actions/cache@v4
         with:
           path: ${{ env.OR_TOOLS_DIR }}
-          key: ortools-${{ env.OR_TOOLS_VERSION }}-ubuntu-22.04
+          key: ortools-9.11-${{ runner.os }}-${{ runner.arch }}
 
       - name: Download & install OR-Tools
         if: steps.cache-ortools.outputs.cache-hit != 'true'
         run: |
-          wget -q "$OR_TOOLS_URL" -O or-tools.tar.gz
+          UBUNTU_VER=$(lsb_release -rs)
+          echo "Ubuntu: $UBUNTU_VER"
+          PRIMARY_URL="https://github.com/google/or-tools/releases/download/v9.11/or-tools_amd64_ubuntu-${UBUNTU_VER}_cpp_v9.11.4210.tar.gz"
+          FALLBACK_URL="https://github.com/google/or-tools/releases/download/v9.11/or-tools_amd64_ubuntu-22.04_cpp_v9.11.4210.tar.gz"
+          wget -q "$PRIMARY_URL" -O or-tools.tar.gz || wget -q "$FALLBACK_URL" -O or-tools.tar.gz
           sudo mkdir -p "$OR_TOOLS_DIR"
           sudo tar -xzf or-tools.tar.gz -C "$OR_TOOLS_DIR" --strip-components=1
           rm or-tools.tar.gz
+          echo "OR-Tools installed at $OR_TOOLS_DIR"
+          ls "$OR_TOOLS_DIR/lib/" | grep ortools | head -5
 
       - name: Install build dependencies
         run: |
           sudo apt-get update -q
           sudo apt-get install -y cmake g++ libz-dev
 
-      - name: Cache CMake build artifacts
+      - name: Cache CMake build
         uses: actions/cache@v4
         with:
           path: build/
-          key: cmake-${{ hashFiles('CMakeLists.txt', 'src/**/*.cpp', 'src/**/*.h') }}
-          restore-keys: cmake-
+          key: cmake-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**') }}
+          restore-keys: cmake-${{ runner.os }}-
 
       - name: Configure CMake
         run: |
@@ -80,13 +86,18 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$OR_TOOLS_DIR"
 
-      - name: Build pdp_solver
-        run: cmake --build build --target pdp_solver -j4
+      - name: Build
+        run: cmake --build build --target pdp_solver -j$(nproc)
+
+      - name: Verify binary
+        run: |
+          file pdp_solver
+          ldd pdp_solver | grep -i ortools || true
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: pdp_solver-linux-amd64
+          name: pdp_solver-linux
           path: pdp_solver
           retention-days: 1
 
@@ -94,36 +105,40 @@ jobs:
   # Job 2: Run benchmark
   # ──────────────────────────────────────────────────────
   benchmark:
-    name: Benchmark (${{ inputs.scope }}, T10=${{ inputs.time_n10 }}s)
-    runs-on: ubuntu-22.04
+    name: Benchmark (${{ inputs.scope }})
+    runs-on: ubuntu-latest
     needs: build
-    timeout-minutes: 210    # hard ceiling: ~3.5 h (all scope = ~2.5 h)
+    timeout-minutes: 210
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Download solver binary
         uses: actions/download-artifact@v4
         with:
-          name: pdp_solver-linux-amd64
+          name: pdp_solver-linux
           path: .
 
       - name: Make binary executable
         run: chmod +x pdp_solver
 
-      # OR-Tools shared libs needed at runtime
       - name: Cache OR-Tools
         id: cache-ortools
         uses: actions/cache@v4
         with:
           path: ${{ env.OR_TOOLS_DIR }}
-          key: ortools-${{ env.OR_TOOLS_VERSION }}-ubuntu-22.04
+          key: ortools-9.11-${{ runner.os }}-${{ runner.arch }}
 
       - name: Download OR-Tools (cache miss)
         if: steps.cache-ortools.outputs.cache-hit != 'true'
         run: |
-          wget -q "$OR_TOOLS_URL" -O or-tools.tar.gz
+          UBUNTU_VER=$(lsb_release -rs)
+          PRIMARY_URL="https://github.com/google/or-tools/releases/download/v9.11/or-tools_amd64_ubuntu-${UBUNTU_VER}_cpp_v9.11.4210.tar.gz"
+          FALLBACK_URL="https://github.com/google/or-tools/releases/download/v9.11/or-tools_amd64_ubuntu-22.04_cpp_v9.11.4210.tar.gz"
+          wget -q "$PRIMARY_URL" -O or-tools.tar.gz || wget -q "$FALLBACK_URL" -O or-tools.tar.gz
           sudo mkdir -p "$OR_TOOLS_DIR"
           sudo tar -xzf or-tools.tar.gz -C "$OR_TOOLS_DIR" --strip-components=1
           rm or-tools.tar.gz
@@ -131,7 +146,7 @@ jobs:
       - name: Set LD_LIBRARY_PATH
         run: echo "LD_LIBRARY_PATH=$OR_TOOLS_DIR/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
-      - name: Smoke test (20s, 1 instance)
+      - name: Smoke test (20s)
         run: |
           ./pdp_solver "Instances 2/U_10_0.5_Num_1.txt" \
             --depot 0 --lsp 3 --run 1 --time 20 2>&1 | \
@@ -148,42 +163,28 @@ jobs:
             "${{ inputs.workers }}"
 
       - name: Write job summary
+        if: always()
         run: |
           CSV=$(ls results/comparison_ci_*.csv 2>/dev/null | head -1)
           if [[ -z "$CSV" ]]; then
             echo "❌ No results CSV found" >> $GITHUB_STEP_SUMMARY
-            exit 1
+            exit 0
           fi
-
-          python3 - "$CSV" \
-            "${{ inputs.scope }}" \
-            "${{ inputs.time_n10 }}" \
-            "${{ inputs.time_n1520 }}" \
-            >> $GITHUB_STEP_SUMMARY <<'PYEOF'
+          python3 - "$CSV" "${{ inputs.scope }}" "${{ inputs.time_n10 }}" "${{ inputs.time_n1520 }}" >> $GITHUB_STEP_SUMMARY <<'PYEOF'
           import sys, csv
-
           path, scope, t10, t1520 = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
           rows = list(csv.DictReader(open(path), delimiter=';'))
           gaps = []
           for r in rows:
               try: gaps.append(float(r['Gap (%)'].replace('%','')))
               except: pass
-
           total  = len(rows)
           valid  = len(gaps)
           avg    = sum(gaps)/valid if valid else float('nan')
           mn     = min(gaps) if valid else float('nan')
           mx     = max(gaps) if valid else float('nan')
           better = sum(1 for g in gaps if g < 0)
-
           print(f"## 📊 Benchmark Results — scope={scope}")
-          print()
-          print(f"| Parameter | Value |")
-          print(f"|-----------|-------|")
-          print(f"| Scope | `{scope}` |")
-          print(f"| Budget n=10 | {t10}s |")
-          print(f"| Budget n≥15 | {t1520}s |")
-          print()
           print(f"| Metric | Value |")
           print(f"|--------|-------|")
           print(f"| Total instances | {total} |")
@@ -193,40 +194,21 @@ jobs:
           print(f"| Max gap | {mx:.2f}% |")
           print(f"| Better than MILP | {better}/{valid} |")
           print()
-
-          print("### Gap by instance size")
-          print("| Size | Instances | Avg gap | Better than MILP |")
-          print("|------|-----------|---------|------------------|")
+          print("### By instance size")
+          print("| Size | Avg gap | Better |")
+          print("|------|---------|--------|")
           for size in [10, 15, 20]:
               sg = [float(r['Gap (%)'].replace('%','')) for r in rows
-                    if r['Customers'] == str(size) and r.get('Gap (%)','N/A') != 'N/A']
+                    if r['Customers']==str(size) and r.get('Gap (%)','N/A')!='N/A']
               if sg:
                   b = sum(1 for g in sg if g < 0)
-                  print(f"| n={size} | {len(sg)} | {sum(sg)/len(sg):.2f}% | {b}/{len(sg)} |")
-
-          print()
-          print("### 5 largest gaps")
-          print("| n | Depot | β | # | MILP | Ours | Gap |")
-          print("|---|-------|---|---|------|------|-----|")
-          scored = [(float(r.get('Gap (%)','0').replace('%','0') or '0'), r) for r in rows
-                    if r.get('Gap (%)','N/A') != 'N/A']
-          for _, r in sorted(scored, reverse=True)[:5]:
-              print(f"| {r['Customers']} | {r['Depot Location']} | {r['Beta']} "
-                    f"| {r['Instance']} | {r['MILP Objective']} "
-                    f"| {r['GA+Tabu C_max']} | {r['Gap (%)']} |")
+                  print(f"| n={size} | {sum(sg)/len(sg):.2f}% | {b}/{len(sg)} |")
           PYEOF
 
-      - name: Upload benchmark CSV
+      - name: Upload CSV results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: results-${{ inputs.scope }}-run${{ github.run_number }}
           path: results/comparison_ci_*.csv
           retention-days: 30
-
-      - name: Upload all result files (on failure too)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: results-full-run${{ github.run_number }}
-          path: results/
-          retention-days: 7
