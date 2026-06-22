@@ -36,10 +36,11 @@ jobs:
       # ── 1. Checkout (manual git clone to avoid Node.js action issues) ──
       - name: Checkout repository
         run: |
-          git clone --depth=1 https://github.com/${{ github.repository }}.git .
-          git checkout ${{ github.sha }} 2>/dev/null || true
-          echo "Working dir contents:"
-          ls -la
+          git clone --depth=1 --branch new https://github.com/${{ github.repository }}.git .
+          echo "=== Branch ==="
+          git log --oneline -1
+          echo "=== CMakeLists.txt present: ==="
+          ls CMakeLists.txt && head -5 CMakeLists.txt
 
       # ── 2. System info ────────────────────────────────────────────────
       - name: System info
