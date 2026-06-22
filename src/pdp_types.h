@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 #include <stdexcept>
+#include <limits>
 
 using namespace std;
 
@@ -33,6 +34,28 @@ struct RouteStop {
 
 using Route = std::vector<RouteStop>;
 using SolutionEncoding = std::vector<Route>;  // size = numTrucks
+
+// ============================================================
+// === NEW: VRP-layer types for TS-ALNS-LSP architecture ======
+// ============================================================
+
+// VRP Solution: ONLY customer visit sequences, no loading info.
+// vrp[truck_id][position] = customer_node_id (1-indexed)
+using VRPSolution = std::vector<std::vector<int>>;
+
+// Lower bound info for a single truck route (paper Proposition 2)
+struct LBInfo {
+    std::vector<double> li;     // li[k] = LB on departure time at position k
+    double lb_completion = 0.0; // LB on completion time (return to depot)
+};
+
+// Result from the Loading Subproblem (Layer 2)
+struct LSPResult {
+    bool   solved    = false;  // false if cutoff triggered or infeasible
+    bool   feasible  = false;
+    double objective = std::numeric_limits<double>::infinity(); // C_max
+    SolutionEncoding encoding; // full encoding if solved
+};
 
 /**
  * @brief Exception thrown khi vi phạm ràng buộc tải trọng nghiêm trọng.
@@ -101,7 +124,7 @@ struct PDPData {
     double droneEndurance = 90.0;           // Maximum flight duration (minutes) for range constraint
     double resupplyTime = 5.0;              // Drone-to-truck handover time at rendezvous node (minutes)
     double depotDroneLoadTime = 5.0;        // Drone loading time at depot (minutes)
-    double allowedWait = 10.0;              // Max truck waiting time for drone at rendezvous (minutes)
+    double allowedWait = 999999.0;              // Max truck waiting time for drone at rendezvous (minutes)
 
     // === DISTANCE MATRICES ===
     vector<vector<double>> truckDistMatrix; // Manhattan distance matrix (truck routing, urban/grid model)

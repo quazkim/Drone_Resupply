@@ -358,7 +358,7 @@ static Route buildRouteWithResupply(
     unordered_set<int> onboard;
     double load = 0.0;
 
-    // ---- Step 1: Initial depot load (Algorithm 11) ----
+    // ---- Step 1: Initial depot load  ----
     vector<int> P0 = selectDepotLoad(customers, 0, t, onboard, data);
     enc.push_back(RouteStop(0, P0));
     for (int p : P0) {

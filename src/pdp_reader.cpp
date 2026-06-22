@@ -41,20 +41,20 @@ void buildAllDistanceMatrices(PDPData& data) {
             const auto& c1 = data.coordinates[i];
             const auto& c2 = data.coordinates[j];
 
-            // Drone: Euclidean → minutes (rounded)
+            // Drone: Euclidean → exact minutes (no rounding — paper uses exact distances)
             double eu   = euclideanDistance(c1.first, c1.second, c2.first, c2.second);
-            double tDrn = round((eu / data.droneSpeed) * 60.0);
+            double tDrn = (eu / data.droneSpeed) * 60.0;
             data.droneDistMatrix[i][j] = data.droneDistMatrix[j][i] = tDrn;
 
-            // Truck: Manhattan → minutes (rounded)
+            // Truck: Manhattan → exact minutes (no rounding)
             double mh   = manhattanDistance(c1.first, c1.second, c2.first, c2.second);
-            double tTrk = round((mh / data.truckSpeed) * 60.0);
+            double tTrk = (mh / data.truckSpeed) * 60.0;
             data.truckDistMatrix[i][j] = data.truckDistMatrix[j][i] = tTrk;
         }
     }
     cout << "[READER] Distance matrices built: "
          << n << "x" << n
-         << " | Truck=Manhattan->min | Drone=Euclidean->min (rounded)\n";
+         << " | Truck=Manhattan->min | Drone=Euclidean->min (exact float)\n";
 }
 
 // ============================================================

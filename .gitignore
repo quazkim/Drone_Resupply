@@ -25,3 +25,12 @@ tempCodeRunnerFile.*
 # Compiled binaries
 *.exe
 *.out
+pdp_solver
+pdp_solver_*
+
+# CMake build directory
+build/
+
+# Python cache
+__pycache__/
+*.pyc

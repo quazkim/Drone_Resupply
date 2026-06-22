@@ -76,7 +76,7 @@ static DroneTry tryAssignDroneTrip(const PDPData& data,
         ev.drone_id = d;
         ev.truck_id = truck_id;
 
-        const double depReady = max(droneAvail[d], maxRelease) + data.depotDroneLoadTime;
+        const double depReady = max(droneAvail[d] > 0 ? (droneAvail[d] + data.depotDroneLoadTime) : 0.0, maxRelease);
         ev.drone_depart_time = depReady;
         ev.drone_arrive_time = depReady + flyOut;
 
@@ -209,8 +209,15 @@ PDPSolution decode_solution(const SolutionEncoding& encoded, const PDPData& data
                         loadW += packageWeight(data, p);
                     }
 
-                    // Wait until all loaded packages are released.
-                    if (t < maxRel) t = maxRel;
+                    double arr = t;
+                    double dep = 0.0;
+                    if (idx == 0 && info.route.size() == 1 && info.route[0] == data.depotIndex) {
+                        dep = maxRel;
+                        info.departure_times[0] = dep;
+                    } else {
+                        dep = max(arr + data.depotReceiveTime, maxRel);
+                        logVisit(data.depotIndex, arr, dep);
+                    }
 
                     if (onboardLoad + loadW > (double)data.truckCapacity + 1e-9) {
                         addPenalty(1e4, "Truck capacity exceeded at depot load");
@@ -221,13 +228,6 @@ PDPSolution decode_solution(const SolutionEncoding& encoded, const PDPData& data
                     }
                     onboardLoad += loadW;
 
-                    const double arr = t;
-                    const double dep = t + data.depotReceiveTime;
-                    if (idx == 0 && info.route.size() == 1 && info.route[0] == data.depotIndex) {
-                        info.departure_times[0] = dep;
-                    } else {
-                        logVisit(data.depotIndex, arr, dep);
-                    }
                     t = dep;
                 }
 
@@ -352,7 +352,6 @@ PDPSolution decode_solution(const SolutionEncoding& encoded, const PDPData& data
 
     double makespan = 0.0;
     for (const auto& td : sol.truck_details) makespan = max(makespan, td.completion_time);
-    for (double t : sol.drone_completion_times) makespan = max(makespan, t);
     sol.totalCost = makespan;
 
     return sol;
