@@ -8,11 +8,7 @@ on:
         required: true
         default: 'n10'
         type: choice
-        options:
-          - n10
-          - n15
-          - n20
-          - all
+        options: [n10, n15, n20, all]
       time_n10:
         description: 'Time budget for n=10 (seconds)'
         required: true
@@ -37,86 +33,81 @@ jobs:
     timeout-minutes: 210
 
     steps:
-      # ── 1. Checkout ──────────────────────────────────────
+      # ── 1. Checkout (manual git clone to avoid Node.js action issues) ──
       - name: Checkout repository
-        uses: actions/checkout@v4
+        run: |
+          git clone --depth=1 https://github.com/${{ github.repository }}.git .
+          git checkout ${{ github.sha }} 2>/dev/null || true
+          echo "Working dir contents:"
+          ls -la
 
-      # ── 2. System info ───────────────────────────────────
+      # ── 2. System info ────────────────────────────────────────────────
       - name: System info
         run: |
-          echo "=== OS ==="
-          lsb_release -a
-          echo "=== CPU cores ==="
-          nproc
-          echo "=== Disk ==="
-          df -h /
+          echo "=== OS ===" && lsb_release -a
+          echo "=== Cores ===" && nproc
+          echo "=== g++ ===" && g++ --version
+          echo "=== cmake ===" && cmake --version 2>/dev/null || echo "cmake not installed"
 
-      # ── 3. Install build deps ─────────────────────────────
-      - name: Install build dependencies
+      # ── 3. Dependencies ───────────────────────────────────────────────
+      - name: Install build tools
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y cmake g++ wget libz-dev lsb-release
+          sudo apt-get install -y cmake g++ wget libz-dev
 
-      # ── 4. Install OR-Tools ───────────────────────────────
+      # ── 4. OR-Tools ───────────────────────────────────────────────────
       - name: Install OR-Tools
         run: |
           UBUNTU_VER=$(lsb_release -rs)
-          echo "Ubuntu version: $UBUNTU_VER"
+          echo "Ubuntu: $UBUNTU_VER"
 
-          # Try exact ubuntu version first, then fallback
+          BASE="https://github.com/google/or-tools/releases/download/v9.11"
           for VER in "$UBUNTU_VER" "24.04" "22.04"; do
-            URL="https://github.com/google/or-tools/releases/download/v9.11/or-tools_amd64_ubuntu-${VER}_cpp_v9.11.4210.tar.gz"
-            echo "Trying: $URL"
+            URL="${BASE}/or-tools_amd64_ubuntu-${VER}_cpp_v9.11.4210.tar.gz"
+            echo "Trying $URL ..."
             if wget -q --spider "$URL" 2>/dev/null; then
-              wget -q "$URL" -O or-tools.tar.gz
-              echo "Downloaded OR-Tools for Ubuntu $VER"
-              break
+              wget -q "$URL" -O or-tools.tar.gz && echo "OK: Ubuntu $VER" && break
             fi
           done
 
-          if [[ ! -f or-tools.tar.gz ]]; then
-            echo "ERROR: Could not download OR-Tools"
-            exit 1
-          fi
+          [[ ! -f or-tools.tar.gz ]] && { echo "FAILED: cannot download OR-Tools"; exit 1; }
 
           sudo mkdir -p /opt/or-tools
           sudo tar -xzf or-tools.tar.gz -C /opt/or-tools --strip-components=1
           rm or-tools.tar.gz
 
-          echo "=== OR-Tools installed ==="
-          ls /opt/or-tools/
-          echo "=== Libraries ==="
-          ls /opt/or-tools/lib/ | grep -i ortools | head -10
+          echo "=== Installed files ==="
+          ls /opt/or-tools/include/ortools/ | head -5
+          ls /opt/or-tools/lib/ | grep -i ortools | head -5
 
-      # ── 5. Build ──────────────────────────────────────────
-      - name: Configure CMake
+      # ── 5. CMake configure ────────────────────────────────────────────
+      - name: CMake configure
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH=/opt/or-tools \
-            -DCMAKE_BUILD_RPATH=/opt/or-tools/lib
-          echo "=== CMake cache ==="
-          grep -E "ortools|CMAKE_CXX" build/CMakeCache.txt | head -20
+            -DCMAKE_INSTALL_RPATH=/opt/or-tools/lib \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+          echo "=== cmake OR-Tools detection ==="
+          grep -E "ortools|ORTOOLS" build/CMakeCache.txt | head -10
 
-      - name: Compile
+      # ── 6. Compile ────────────────────────────────────────────────────
+      - name: Compile pdp_solver
         run: |
-          cmake --build build --target pdp_solver -j$(nproc) 2>&1
-          echo "=== Binary info ==="
+          cmake --build build --target pdp_solver -j$(nproc)
+          echo "=== Binary ==="
           file pdp_solver
-          ldd pdp_solver | grep -E "ortools|not found" || true
+          echo "=== OR-Tools libs linked ==="
+          ldd pdp_solver | grep -E "ortools|not found" || echo "(none found)"
 
-      # ── 6. Runtime setup ──────────────────────────────────
-      - name: Set library path
-        run: echo "LD_LIBRARY_PATH=/opt/or-tools/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
-
-      # ── 7. Smoke test ─────────────────────────────────────
+      # ── 7. Smoke test ─────────────────────────────────────────────────
       - name: Smoke test (20s)
         run: |
           ./pdp_solver "Instances 2/U_10_0.5_Num_1.txt" \
             --depot 0 --lsp 3 --run 1 --time 20 2>&1 | \
             grep -E "C_max|Feasible|RUNTIME"
 
-      # ── 8. Run benchmark ──────────────────────────────────
+      # ── 8. Run benchmark ──────────────────────────────────────────────
       - name: Run benchmark
         run: |
           chmod +x scripts/run_benchmark_ci.sh
@@ -128,13 +119,15 @@ jobs:
             "${{ inputs.lsp_cutoff }}" \
             "${{ inputs.workers }}"
 
-      # ── 9. Summary ────────────────────────────────────────
+      # ── 9. Summary ────────────────────────────────────────────────────
       - name: Write summary
         if: always()
         run: |
           CSV=$(ls results/comparison_ci_*.csv 2>/dev/null | head -1)
-          [[ -z "$CSV" ]] && { echo "No CSV found" >> $GITHUB_STEP_SUMMARY; exit 0; }
-
+          if [[ -z "$CSV" ]]; then
+            echo "❌ No CSV found — benchmark did not run" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
           python3 - "$CSV" "${{ inputs.scope }}" >> $GITHUB_STEP_SUMMARY <<'PYEOF'
           import sys, csv
           path, scope = sys.argv[1], sys.argv[2]
@@ -143,29 +136,28 @@ jobs:
           for r in rows:
               try: gaps.append(float(r['Gap (%)'].replace('%','')))
               except: pass
-          total  = len(rows)
           valid  = len(gaps)
           avg    = sum(gaps)/valid if valid else float('nan')
           better = sum(1 for g in gaps if g < 0)
           print(f"## 📊 Benchmark — {scope}")
           print(f"| Metric | Value |")
           print(f"|--------|-------|")
-          print(f"| Instances | {total} |")
+          print(f"| Instances | {len(rows)} |")
           print(f"| **Avg gap vs MILP** | **{avg:.2f}%** |")
-          print(f"| Min / Max gap | {min(gaps):.2f}% / {max(gaps):.2f}% |" if gaps else "| - | - |")
+          if gaps: print(f"| Min / Max | {min(gaps):.2f}% / {max(gaps):.2f}% |")
           print(f"| Better than MILP | {better}/{valid} |")
           print()
           print("| n | Avg gap | Better |")
           print("|---|---------|--------|")
-          for size in [10, 15, 20]:
+          for sz in [10, 15, 20]:
               sg = [float(r['Gap (%)'].replace('%','')) for r in rows
-                    if r['Customers']==str(size) and r.get('Gap (%)','N/A')!='N/A']
+                    if r['Customers']==str(sz) and r.get('Gap (%)','N/A')!='N/A']
               if sg:
                   b = sum(1 for g in sg if g < 0)
-                  print(f"| {size} | {sum(sg)/len(sg):.2f}% | {b}/{len(sg)} |")
+                  print(f"| {sz} | {sum(sg)/len(sg):.2f}% | {b}/{len(sg)} |")
           PYEOF
 
-      # ── 10. Upload results ────────────────────────────────
+      # ── 10. Upload ────────────────────────────────────────────────────
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
