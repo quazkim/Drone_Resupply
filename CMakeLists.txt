@@ -14,6 +14,7 @@ set(CMAKE_CXX_FLAGS_DEBUG   "-g -O0 -Wall -Wextra")
 
 # Shared library sources (no main)
 set(PDP_SOURCES
+    src/pdp_alns.cpp
     src/pdp_fitness.cpp
     src/pdp_ga.cpp
     src/pdp_init.cpp

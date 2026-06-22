@@ -71,7 +71,7 @@ struct PDPData {
     int numNodes = 0;                           // Total nodes in the network (depot + customers)
     int numCustomers = 0;                       // Number of pickup-delivery customer pairs (P, DL, D nodes)
     int numTrucks = 2;                          // Number of available trucks for ground delivery
-    int truckCapacity = 50;                     // Load capacity per truck (kg/units)
+    int truckCapacity = 1000000;                // Pina: trucks are UNCAPACITATED (large value = effectively unlimited)
     double truckSpeed = 30.0;                   // Truck cruising speed (km/h)
     double truckServiceTime = 3.0;              // Time to process each pickup/delivery location (minutes)
     double depotReceiveTime = 5.0;              // Time for truck to receive resupply at depot (minutes)
@@ -82,6 +82,13 @@ struct PDPData {
     vector<string> nodeTypes;                   // Node classification: "DEPOT", "P" (pickup), "DL" (delivery), "D" (optional)
     vector<int> readyTimes;                     // Ready time constraints for time-window feasibility
     vector<int> pairIds;                        // Pairing information for pickup-delivery constraints
+
+    // === C2 PICKUP <-> DELIVERY MAPS (precomputed once in readPDPFile) ===
+    // deliveryOfPickup[p] = delivery node DL paired with pickup node p (-1 if none)
+    // pickupOfDelivery[d] = pickup node P paired with delivery node d (-1 if none)
+    // Avoids O(N) linear scans inside the decode/repair hot loops.
+    vector<int> deliveryOfPickup;
+    vector<int> pickupOfDelivery;
 
     // === DEPOT CONFIGURATION ===
     pair<double, double> depotCenter = {10.0, 10.0};  // Center depot coordinates (primary resupply point)
@@ -101,7 +108,7 @@ struct PDPData {
     double droneEndurance = 90.0;           // Maximum flight duration (minutes) for range constraint
     double resupplyTime = 5.0;              // Drone-to-truck handover time at rendezvous node (minutes)
     double depotDroneLoadTime = 5.0;        // Drone loading time at depot (minutes)
-    double allowedWait = 10.0;              // Max truck waiting time for drone at rendezvous (minutes)
+    double allowedWait = 1e9;               // Pina: trucks may wait for a drone "as long as necessary" (no cap)
 
     // === DISTANCE MATRICES ===
     vector<vector<double>> truckDistMatrix; // Manhattan distance matrix (truck routing, urban/grid model)
@@ -134,7 +141,8 @@ struct PDPData {
     }
     
     int getDroneCapacity() const {
-        if (numCustomers + 1 <= 20) return 2;
+        // Pina: Q=2 for instances with up to 20 customers, Q=10 for larger ones.
+        if (numCustomers <= 20) return 2;
         return 10;
     }
 };

@@ -16,6 +16,8 @@
 #include <sstream>
 #include <string>
 
+#include "pdp_alns.h" // alnsSearchPDP (ALNS + TS + loading)
+#include "pdp_fitness.h" // decode_solution
 #include "pdp_ga.h" // geneticAlgorithmPDP (MD encoding)
 #include "pdp_init.h" // initStructuredPopulationPDP
 #include "pdp_reader.h"
@@ -62,6 +64,7 @@ int main(int argc, char *argv[]) {
     ofstream logFile;
     double timeLimitSeconds = -1.0;
     bool timeLimitSet = false;
+    string algName = "alns";   // ALNS+TS by default; use --alg ga for the legacy GA
 
   // Parse --depot MODE
   int depotMode = 0;
@@ -96,6 +99,12 @@ int main(int argc, char *argv[]) {
         istringstream ss(argv[++i]);
         if (!(ss >> runNumber) || runNumber <= 0) {
           cerr << "Error: --run must be a positive integer\n";
+          return 1;
+        }
+      } else if (string(argv[i]) == "--alg" && i + 1 < argc) {
+        algName = argv[++i];
+        if (algName != "alns" && algName != "ga") {
+          cerr << "Error: --alg must be 'alns' or 'ga'\n";
           return 1;
         }
       } else if (string(argv[i]) == "--log" && i + 1 < argc) {
@@ -181,16 +190,38 @@ int main(int argc, char *argv[]) {
   cout << "[TIME LIMIT] " << fixed << setprecision(1) << timeLimitSeconds << " seconds"
        << (timeLimitSet ? " (manual)" : " (auto)") << "\n";
 
-  // ---- Run GA ----
+  // ---- Run solver (ALNS+TS by default, GA optional) ----
+  cout << "[ALGORITHM] " << (algName == "alns" ? "ALNS + Tabu Search + greedy loading"
+                                               : "Genetic Algorithm + Tabu Search") << "\n";
+
+  PDPSolution solution;
+  if (algName == "ga") {
     vector<SolutionEncoding> initPopulation =
       initStructuredPopulationPDP(populationSize, data, runNumber);
-    PDPSolution solution =
+    solution =
       geneticAlgorithmPDP(data, initPopulation,
           populationSize, maxGenerations, mutationRate,
           runNumber, isSmallScale,
           logEnabled ? (std::ostream*)&logFile : nullptr,
           /*logEvery=*/1,
           timeLimitSeconds);
+  } else {
+    // ALNS: build a small pool and pick the best decoded individual as the start.
+    vector<SolutionEncoding> seedPop =
+      initStructuredPopulationPDP(max(5, min(populationSize, 20)), data, runNumber);
+    SolutionEncoding initEnc = seedPop.front();
+    double bestInit = 1e18;
+    for (const auto& enc : seedPop) {
+      PDPSolution s = decode_solution(enc, data, false);
+      double f = s.totalCost + s.totalPenalty;
+      if (f < bestInit) { bestInit = f; initEnc = enc; }
+    }
+    solution =
+      alnsSearchPDP(data, initEnc,
+          /*maxIterations=*/100000,
+          timeLimitSeconds, runNumber,
+          logEnabled ? (std::ostream*)&logFile : nullptr);
+  }
 
   double costGA = solution.totalCost;
 

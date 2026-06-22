@@ -68,14 +68,7 @@ bool validateSolution(const PDPSolution& solution, const PDPData& data, bool ver
     bool c2OK = true;
     for (int i = 1; i < data.numNodes; ++i) {
         if (data.nodeTypes[i] == "P") {
-            int pairId = data.pairIds[i];
-            int d = -1;
-            for (int j = 1; j < data.numNodes; ++j) {
-                if (data.pairIds[j] == pairId && data.nodeTypes[j] == "DL") {
-                    d = j;
-                    break;
-                }
-            }
+            int d = (i < (int)data.deliveryOfPickup.size()) ? data.deliveryOfPickup[i] : -1;
             if (d == -1) continue;
 
             int route_i = -1, pos_i = -1;
@@ -111,7 +104,7 @@ bool validateSolution(const PDPSolution& solution, const PDPData& data, bool ver
             if (!sameRoute || !orderOK || droneResupplied) {
                 c2OK = false;
                 if (verbose) {
-                    cout << "  ❌ C2 constraint violated for pair " << pairId 
+                    cout << "  ❌ C2 constraint violated for pair " << data.pairIds[i]
                          << " (Pickup " << i << ", Delivery " << d << "): "
                          << "SameRoute=" << (sameRoute ? "yes" : "no") 
                          << ", OrderOK=" << (orderOK ? "yes" : "no")

@@ -149,6 +149,29 @@ bool readPDPFile(const string& filename, PDPData& data) {
     // ================================================================
     data.numCustomers = std::max(0, data.numNodes - 1);
 
+    // ================================================================
+    // STEP 5: Precompute C2 pickup <-> delivery maps (O(N), once)
+    //         Replaces repeated O(N) scans in decode/repair hot loops.
+    // ================================================================
+    data.deliveryOfPickup.assign(data.numNodes, -1);
+    data.pickupOfDelivery.assign(data.numNodes, -1);
+    {
+        std::map<int,int> pickupByPair, deliveryByPair;
+        for (int i = 1; i < data.numNodes; ++i) {
+            if (data.nodeTypes[i] == "P")       pickupByPair[data.pairIds[i]]   = i;
+            else if (data.nodeTypes[i] == "DL") deliveryByPair[data.pairIds[i]] = i;
+        }
+        for (const auto& kv : pickupByPair) {
+            auto it = deliveryByPair.find(kv.first);
+            if (it != deliveryByPair.end()) {
+                const int p = kv.second;
+                const int d = it->second;
+                data.deliveryOfPickup[p] = d;
+                data.pickupOfDelivery[d] = p;
+            }
+        }
+    }
+
     cout << "[READER] Loaded " << data.numNodes << " nodes total | "
          << "Depot: index 0 | Customers: " << data.numCustomers << "\n";
     return true;

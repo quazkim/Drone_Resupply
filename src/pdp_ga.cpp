@@ -464,13 +464,7 @@ static void rebuildDepotLoadsForRoute(Route& r, const PDPData& data) {
                 onboard.insert(i);
                 onboardLoad += pkgWeight(data, i);
             } else if (type == "DL") {
-                int pickupNode = -1;
-                for (int p = 1; p < data.numNodes; ++p) {
-                    if (data.pairIds[p] == data.pairIds[i] && data.nodeTypes[p] == "P") {
-                        pickupNode = p;
-                        break;
-                    }
-                }
+                int pickupNode = (i < (int)data.pickupOfDelivery.size()) ? data.pickupOfDelivery[i] : -1;
                 if (pickupNode != -1) {
                     onboard.erase(pickupNode);
                     onboardLoad -= pkgWeight(data, i);
@@ -1120,14 +1114,7 @@ PDPSolution geneticAlgorithmPDP(const PDPData& data,
 void repairC2Pairs(vector<vector<int>>& routes, const PDPData& data) {
     for (int i = 1; i < data.numNodes; ++i) {
         if (data.nodeTypes[i] == "P") {
-            int pairId = data.pairIds[i];
-            int d = -1;
-            for (int j = 1; j < data.numNodes; ++j) {
-                if (data.pairIds[j] == pairId && data.nodeTypes[j] == "DL") {
-                    d = j;
-                    break;
-                }
-            }
+            int d = (i < (int)data.deliveryOfPickup.size()) ? data.deliveryOfPickup[i] : -1;
             if (d == -1) continue;
 
             int route_p = -1, pos_p = -1;

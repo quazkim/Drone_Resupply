@@ -458,14 +458,11 @@ static Route buildRouteWithResupply(
                 onboard.insert(j);
                 load += pkgWeight(data, j);
             } else if (tp == "DL") {
-                // Delivery Location: remove paired pickup package
-                for (int p = 1; p < data.numNodes; ++p) {
-                    if (data.pairIds[p] == data.pairIds[j]
-                        && data.nodeTypes[p] == "P") {
-                        onboard.erase(p);
-                        load = max(0.0, load - pkgWeight(data, p));
-                        break;
-                    }
+                // Delivery Location: remove paired pickup package (precomputed map)
+                int p = (j < (int)data.pickupOfDelivery.size()) ? data.pickupOfDelivery[j] : -1;
+                if (p > 0) {
+                    onboard.erase(p);
+                    load = max(0.0, load - pkgWeight(data, p));
                 }
             } else {
                 // Type "D": standard delivery, remove from truck
@@ -547,6 +544,24 @@ static SolutionEncoding buildIndividual(const PDPData& data, mt19937& gen) {
 // ============================================================
 // Public API: Build initial population
 // ============================================================
+
+// ============================================================
+// Loading evaluator for ALNS/TS (TẦNG 3 - fast path)
+// Deterministic greedy loading for a fixed routing.
+// ============================================================
+SolutionEncoding buildEncodingForRouting(const std::vector<std::vector<int>>& customerRoutes,
+                                         const PDPData& data) {
+    // Fixed seed => the same routing always yields the same encoding/cost.
+    std::mt19937 gen(12345u);
+    DroneScheduleInit droneSchedule(max(1, data.numDrones));
+
+    SolutionEncoding sol;
+    sol.reserve(customerRoutes.size());
+    for (int k = 0; k < (int)customerRoutes.size(); ++k) {
+        sol.push_back(buildRouteWithResupply(customerRoutes[k], k, data, droneSchedule, gen));
+    }
+    return sol;
+}
 
 std::vector<SolutionEncoding> initStructuredPopulationPDP(int populationSize,
                                                          const PDPData& data,

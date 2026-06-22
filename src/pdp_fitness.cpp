@@ -76,9 +76,13 @@ static DroneTry tryAssignDroneTrip(const PDPData& data,
         ev.drone_id = d;
         ev.truck_id = truck_id;
 
-        const double depReady = max(droneAvail[d], maxRelease) + data.depotDroneLoadTime;
-        ev.drone_depart_time = depReady;
-        ev.drone_arrive_time = depReady + flyOut;
+        // Pina (constraints 29/30): δd (depot prep) only applies between sorties.
+        // A drone's FIRST sortie (droneAvail[d]==0) leaves the depot without δd,
+        // mirroring a truck's first departure (constraint 31, no δt).
+        const double droneReceive = (droneAvail[d] <= 1e-9) ? 0.0 : data.depotDroneLoadTime;
+        const double earliestDepart = max(droneAvail[d] + droneReceive, maxRelease);
+        ev.drone_depart_time = max(earliestDepart, truck_arrive_time - flyOut);
+        ev.drone_arrive_time = ev.drone_depart_time + flyOut;
 
         ev.truck_arrive_time = truck_arrive_time;
         ev.resupply_start_time = max(ev.drone_arrive_time, ev.truck_arrive_time);
@@ -183,6 +187,9 @@ PDPSolution decode_solution(const SolutionEncoding& encoded, const PDPData& data
             const RouteStop& st = route[idx];
 
             if (st.node == 0) {
+                const bool leavesDepot = (idx + 1 < route.size() && route[idx + 1].node > 0);
+                const bool isFirstDepotStop = (idx == 0);
+
                 // Move to depot if needed
                 if (pos != data.depotIndex) {
                     const double travel = truckTravelMinutes(data, pos, data.depotIndex);
@@ -195,6 +202,14 @@ PDPSolution decode_solution(const SolutionEncoding& encoded, const PDPData& data
                     pos = data.depotIndex;
                     logVisit(data.depotIndex, arr, arr);
                 }
+
+                auto recordDepotService = [&](double arr, double dep) {
+                    if (!info.route.empty() && info.route.back() == data.depotIndex) {
+                        info.departure_times.back() = dep;
+                    } else {
+                        logVisit(data.depotIndex, arr, dep);
+                    }
+                };
 
                 if (!st.packages.empty()) {
                     double maxRel = 0.0;
@@ -209,9 +224,6 @@ PDPSolution decode_solution(const SolutionEncoding& encoded, const PDPData& data
                         loadW += packageWeight(data, p);
                     }
 
-                    // Wait until all loaded packages are released.
-                    if (t < maxRel) t = maxRel;
-
                     if (onboardLoad + loadW > (double)data.truckCapacity + 1e-9) {
                         addPenalty(1e4, "Truck capacity exceeded at depot load");
                     }
@@ -222,12 +234,15 @@ PDPSolution decode_solution(const SolutionEncoding& encoded, const PDPData& data
                     onboardLoad += loadW;
 
                     const double arr = t;
+                    const double dep = leavesDepot
+                                           ? max(t + (isFirstDepotStop ? 0.0 : data.depotReceiveTime), maxRel)
+                                           : t;
+                    recordDepotService(arr, dep);
+                    t = dep;
+                } else if (leavesDepot && !isFirstDepotStop) {
+                    const double arr = t;
                     const double dep = t + data.depotReceiveTime;
-                    if (idx == 0 && info.route.size() == 1 && info.route[0] == data.depotIndex) {
-                        info.departure_times[0] = dep;
-                    } else {
-                        logVisit(data.depotIndex, arr, dep);
-                    }
+                    recordDepotService(arr, dep);
                     t = dep;
                 }
 
@@ -251,8 +266,65 @@ PDPSolution decode_solution(const SolutionEncoding& encoded, const PDPData& data
             t = arrive;
             pos = i;
 
-            // Drone resupply at i[P] before serving i
+            auto serviceCustomer = [&]() {
+                if (i > 0 && i < (int)data.nodeTypes.size()) {
+                    string type = data.nodeTypes[i];
+                    if (type == "P") {
+                        onboard.insert(i);
+                        onboardLoad += packageWeight(data, i);
+                    } else if (type == "DL") {
+                        int pickupNode = -1;
+                        for (int p = 1; p < data.numNodes; ++p) {
+                            if (data.pairIds[p] == data.pairIds[i] && data.nodeTypes[p] == "P") {
+                                pickupNode = p;
+                                break;
+                            }
+                        }
+                        if (pickupNode == -1 || !onboard.count(pickupNode)) {
+                            addPenalty(1e4, "Corresponding C2 Pickup package not onboard before C2 Delivery service");
+                        } else {
+                            onboard.erase(pickupNode);
+                            onboardLoad -= packageWeight(data, i);
+                        }
+                    } else { // "D" or other types: Delivery C1
+                        if (!onboard.count(i)) {
+                            addPenalty(1e4, "Package not available before C1 service");
+                        } else {
+                            onboard.erase(i);
+                            onboardLoad -= packageWeight(data, i);
+                        }
+                    }
+                } else {
+                    addPenalty(1e4, "Invalid customer node index");
+                }
+                t += data.truckServiceTime;
+            };
+
+            auto canServeBeforeResupply = [&]() {
+                if (i <= 0 || i >= (int)data.nodeTypes.size()) return false;
+                const string& type = data.nodeTypes[i];
+                if (type == "P") return true;
+                if (type == "DL") {
+                    for (int p = 1; p < data.numNodes; ++p) {
+                        if (data.pairIds[p] == data.pairIds[i] && data.nodeTypes[p] == "P") {
+                            return onboard.count(p) > 0;
+                        }
+                    }
+                    return false;
+                }
+                return onboard.count(i) > 0;
+            };
+
+            bool servedAtNode = false;
+
+            // Drone resupply at i[P]; service order depends on package availability at i.
             if (!st.packages.empty()) {
+                const bool serveBeforeResupply = canServeBeforeResupply();
+                if (serveBeforeResupply) {
+                    serviceCustomer();
+                    servedAtNode = true;
+                }
+
                 // Disallow supplying packages that are served earlier in the route (position rule)
                 // This is a structural check; detailed repair happens in GA operators.
                 // Here we only ensure packages are valid customer ids.
@@ -290,44 +362,15 @@ PDPSolution decode_solution(const SolutionEncoding& encoded, const PDPData& data
             }
 
             // Serve i
-            if (i > 0 && i < (int)data.nodeTypes.size()) {
-                string type = data.nodeTypes[i];
-                if (type == "P") {
-                    onboard.insert(i);
-                    onboardLoad += packageWeight(data, i);
-                } else if (type == "DL") {
-                    int pickupNode = -1;
-                    for (int p = 1; p < data.numNodes; ++p) {
-                        if (data.pairIds[p] == data.pairIds[i] && data.nodeTypes[p] == "P") {
-                            pickupNode = p;
-                            break;
-                        }
-                    }
-                    if (pickupNode == -1 || !onboard.count(pickupNode)) {
-                        addPenalty(1e4, "Corresponding C2 Pickup package not onboard before C2 Delivery service");
-                    } else {
-                        onboard.erase(pickupNode);
-                        onboardLoad -= packageWeight(data, i);
-                    }
-                } else { // "D" or other types: Delivery C1
-                    if (!onboard.count(i)) {
-                        addPenalty(1e4, "Package not available before C1 service");
-                    } else {
-                        onboard.erase(i);
-                        onboardLoad -= packageWeight(data, i);
-                    }
-                }
-            } else {
-                addPenalty(1e4, "Invalid customer node index");
+            if (!servedAtNode) {
+                serviceCustomer();
             }
 
             if (onboardLoad > (double)data.truckCapacity + 1e-9) {
                 addPenalty(1e4, "Truck capacity exceeded after service");
             }
 
-            const double depart = t + data.truckServiceTime;
-            logVisit(i, arrive, depart);
-            t = depart;
+            logVisit(i, arrive, t);
         }
 
         // Ensure truck returns to depot at end
@@ -350,9 +393,11 @@ PDPSolution decode_solution(const SolutionEncoding& encoded, const PDPData& data
         sol.drone_completion_times[d] = droneAvail[d];
     }
 
+    // Objective = makespan = time the LAST TRUCK returns to depot (Pina VRPRD-DR).
+    // Drones returning to the depot empty after their final trip do NOT extend the
+    // objective; drone_completion_times is kept only for endurance/feasibility reporting.
     double makespan = 0.0;
     for (const auto& td : sol.truck_details) makespan = max(makespan, td.completion_time);
-    for (double t : sol.drone_completion_times) makespan = max(makespan, t);
     sol.totalCost = makespan;
 
     return sol;
